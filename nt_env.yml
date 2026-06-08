@@ -1,0 +1,27 @@
+name: agop-eigen-alignment-nt
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+
+  # Numerical
+  - numpy
+  - scipy<=1.12.0,>=1.6.0
+  - matplotlib
+
+  # Utilities
+  - tqdm
+  - jupyterlab
+
+  # Jupyter
+  - ipykernel
+  - ipympl
+  
+  - pip
+  - pip:
+      - --index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+      - jax==0.4.16
+      - jaxlib==0.4.14
+      - neural-tangents
+      - optax
+      - flax==0.7.1

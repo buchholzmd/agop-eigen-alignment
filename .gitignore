@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+
+# IDEs
+.vscode/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# Outputs
+output/*
+
+# Weights & Biases
+wandb/*
+
+# Temporary files
+tmp/
+temp/
+
+# OS trash
+.Trashes

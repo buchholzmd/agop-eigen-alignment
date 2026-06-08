@@ -1,0 +1,11 @@
+name: agop-eigen-alignment-torch
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy<=1.12.0,>=1.6.0
+  - matplotlib
+  - jupyterlab
+  - ipykernel
+  - pip

@@ -1,0 +1,27 @@
+name: agop-eigen-alignment-jax
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+
+  # Numerical
+  - numpy
+  - scipy
+  - matplotlib
+
+  # Utilities
+  - tqdm
+  - wandb
+
+  # Jupyter
+  - jupyterlab
+  - ipykernel
+  - ipympl
+
+    # JAX
+  - jax
+  - jaxlib
+  - optax
+  - flax
+
+  - pip
