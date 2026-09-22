@@ -100,17 +100,33 @@ def gd_update(params, grads, lr, parameterization="standard"):
         W, b = p["weights"], p["bias"]
         gW, gb = g["weights"], g["bias"]
 
-        lr_scale = 1.0
-        if parameterization == "mup":
+        fan_in, fan_out = W.shape
 
+        if parameterization == "standard":
+            lr_scale = 1.0
+
+        elif parameterization == "ntk":
+            lr_scale = 1.0 / fan_in
+
+        elif parameterization == "mup":
             if layer_idx == 0:
-                # input layer
-                lr_scale = W.shape[0]
-
+                # input layer: d -> m
+                lr_scale = fan_out / fan_in
             elif layer_idx == L - 1:
-                # output layer
-                lr_scale = 1.0 /  W.shape[1]
+                # output layer: m -> 1
+                lr_scale = 1.0 / fan_in
+            else:
+                # hidden layer: m -> m
+                lr_scale = 1.0
 
+        elif parameterization == "spectral":
+            lr_scale = fan_out / fan_in
+
+        else:
+            raise ValueError(
+                f"Unknown parameterization: {parameterization}"
+            )
+        
         new_params.append({
             "weights": W - lr * lr_scale * gW,
             "bias": b - lr * gb

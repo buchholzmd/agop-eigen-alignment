@@ -31,28 +31,39 @@ class MLP:
 
             w_key, b_key = jr.split(k)
 
-            if self.parameterization in ['standard', 'ntk']:
-                W = jr.normal(w_key, (fan_out, fan_in)) / jnp.sqrt(fan_in)
-                b = jr.normal(b_key, (fan_out,)) / jnp.sqrt(fan_in)
-            
-            elif self.parameterization == 'mup':
-                # input layer
-                if layer_idx == 0:
-                    W = jr.normal(w_key, (fan_out, fan_in)) / jnp.sqrt(fan_in)
-                    b = jr.normal(b_key, (fan_out,)) / jnp.sqrt(fan_in)
-        
-                # output layer
-                elif layer_idx == L - 1:
-                    W = jr.normal(w_key, (fan_out, fan_in)) / fan_in
-                    b = jr.normal(b_key, (fan_out,)) / fan_in
+            if self.parameterization == "standard":
+                sigma_w = 1.0 / jnp.sqrt(fan_in)
 
-                # hidden layers
+            elif self.parameterization == "ntk":
+                sigma_w = 1.0 / jnp.sqrt(fan_in)
+
+            elif self.parameterization == "mup":
+                if layer_idx == 0:
+                    # input layer: d -> m
+                    sigma_w = 1.0 / jnp.sqrt(fan_in)
+                elif layer_idx == L - 1:
+                    # output layer: m -> 1
+                    sigma_w = 1.0 / fan_in
                 else:
-                    W = jr.normal(w_key, (fan_out, fan_in)) / jnp.sqrt(fan_in)
-                    b = jr.normal(b_key, (fan_out,)) / jnp.sqrt(fan_in)
-            
+                    # hidden layer: m -> m
+                    sigma_w = 1.0 / jnp.sqrt(fan_in)
+
+            elif self.parameterization == "spectral":
+                sigma_w = (
+                    1.0 / jnp.sqrt(fan_in)
+                    * jnp.minimum(
+                        1.0,
+                        jnp.sqrt(fan_out / fan_in),
+                    )
+                )
+
             else:
-                raise ValueError(f"Unknown parameterization: {self.parameterization}")
+                raise ValueError(
+                    f"Unknown parameterization: {self.parameterization}"
+                )
+
+            W = jr.normal(w_key, (fan_out, fan_in)) * sigma_w
+            b = jr.normal(b_key, (fan_out,)) * sigma_w
             
             self.params.append({
                 "weights": W,

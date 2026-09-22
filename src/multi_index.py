@@ -11,9 +11,15 @@ def poly(coeffs, orders, z):
         orders = jnp.pad(orders, (0, z.shape[0] - orders.shape[0]))
     return coeffs @ (z ** orders)
 
-def generate_multi_index_data(g, r, X, rng, noise=0.1):
+def generate_multi_index_data(g, r, X, rng, noise=0.1, normalize='none'):
     U = stiefel(X.shape[-1], r, rng)
-    f = lambda x: g(U @ x)
+
+    if normalize == 'rms':
+        f = lambda x: g(U @ x)
+        scale = jnp.sqrt(jnp.mean(vmap(f)(X)) ** 2)
+    elif normalize == 'none':
+        scale = 1.0
+    f = lambda x: g(U @ x) / scale
 
     y = vmap(f)(X) + noise * jr.normal(rng.next(), (X.shape[0],))
 

@@ -35,6 +35,7 @@ output/*
 
 # Weights & Biases
 wandb/*
+notebooks/wandb/*
 
 # Temporary files
 tmp/
