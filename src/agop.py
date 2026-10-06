@@ -48,13 +48,13 @@ def compute_agop_eigs(state, model, X, k, rng, num_power_iters=None, **kwargs):
 def compute_nfm(state, **kwargs):
     W = state.params[0]['weights']
     dim = W.shape[1]
-    return W.T @ W / dim
+    return W.T @ W
 
 def compute_nfm_eigs(state, k, rng, num_power_iters=None, **kwargs):
     if num_power_iters is not None:
         W = state.params[0]['weights']
         dim = W.shape[1]
-        eigvals, eigvecs = compute_topk_eigs(lambda v: W.T @ (W @ v) / dim, dim, k, num_power_iters, rng)
+        eigvals, eigvecs = compute_topk_eigs(lambda v: W.T @ (W @ v), dim, k, num_power_iters, rng)
     else:
         nfm = kwargs.get("nfm", compute_nfm(state, **kwargs))
         eigvals, eigvecs = jla.eigh(nfm)
