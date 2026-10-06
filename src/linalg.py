@@ -140,6 +140,19 @@ def align_bases(QA, QB):
         "overlap_matrix": W,
     }
 
+def _to_prob(lam, k=None, eps=1e-12):
+    """Normalize a spectrum to a probability vector.
+
+    Restricts to the top-k first: the AGOP has rank <= min(n, r) and the NFM
+    rank <= m, so a full-length spectrum is mostly numerical noise around zero,
+    and distances computed over it measure the regularizer rather than the data.
+    """
+    lam = jnp.sort(lam)[::-1]
+    if k is not None:
+        lam = lam[:k]
+    lam = jnp.clip(lam, 0.0)
+    return lam / (lam.sum() + eps)
+
 @jax.jit
 def perm_hamming(perm1, perm2):
     assert perm1.shape == perm2.shape
@@ -156,23 +169,6 @@ def kendall_tau(perm):
     return 1 - 2 * count / total
 
 @jax.jit
-def spectral_l2(lam1, lam2):
-    lam1 = lam1 / lam1.sum()
-    lam2 = lam2 / lam2.sum()
-    return jnp.linalg.norm(lam1 - lam2)
-
-@jax.jit
-def spectral_kl(lam1, lam2, eps=1e-8):
-    p = lam1 / lam1.sum()
-    q = lam2 / lam2.sum()
-    return jnp.sum(p * jnp.log((p + eps) / (q + eps)))
-
-@jax.jit
-def wasserstein_1d(lam1, lam2):
-    p = lam1 / lam1.sum()
-    q = lam2 / lam2.sum()
-
-    cdf_p = jnp.cumsum(p)
-    cdf_q = jnp.cumsum(q)
-
-    return jnp.sum(jnp.abs(cdf_p - cdf_q))
+def wasserstein_1d(lam1, lam2):  # the actual W1
+    p, q = _to_prob(lam1), _to_prob(lam2)
+    return jnp.sum(jnp.abs(jnp.cumsum(p) - jnp.cumsum(q)))
