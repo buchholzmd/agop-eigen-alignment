@@ -15,7 +15,7 @@ def stiefel(m, n, rng, shape=()):
     z = jr.normal(rng.next(), (*shape, max(n, _m), min(n, _m)))
 
     q, r = jnp.linalg.qr(z)
-    d = jnp.diagonal(r, offset=0, axis1=0, axis2=1) 
+    d = jnp.diagonal(r, offset=0, axis1=-2, axis2=-1)
 
     x = q * jnp.expand_dims(jnp.sign(d), -2)
 
@@ -23,6 +23,23 @@ def stiefel(m, n, rng, shape=()):
         return x.mT
     else:
         return x
+
+def compute_topk_eigs(matrix_fn, dim, k, num_iters, rng):
+    '''
+    Compute the top-k eigenvalues and eigenvectors of a matrix using orthogonal iteration.
+    '''
+    Q_k = stiefel(dim, k, rng).T
+    matrix_fn = jax.vmap(matrix_fn, in_axes=1, out_axes=1)
+
+    def body (_, Q_k):
+        Q_k1, _ = jnp.linalg.qr(matrix_fn(Q_k))
+        return Q_k1
+
+    Q = jax.lax.fori_loop(0, num_iters, body, Q_k)
+
+    M = Q.T @ matrix_fn(Q)
+    eigvals, eigvecs = jnp.linalg.eigh(M)
+    return eigvals[::-1], Q @ eigvecs[:, ::-1]
 
 def mvp_power_iteration(matrix_fn, dim, num_iters, rng):
     b_k = jr.uniform(rng.next(), shape=(dim,))
@@ -35,23 +52,23 @@ def mvp_power_iteration(matrix_fn, dim, num_iters, rng):
     mu = b_k.dot(matrix_fn(b_k)) / jnp.linalg.norm(b_k)**2
     return mu, b_k
 
-def compute_topk_eigs(mvp, dim, k, num_iters, rng):
-    vecs = []
-    vals = []
+# def compute_topk_eigs(mvp, dim, k, num_iters, rng):
+#     vecs = []
+#     vals = []
 
-    for _ in range(k):
-        val, vec = mvp_power_iteration(mvp, dim, num_iters, rng)
+#     for _ in range(k):
+#         val, vec = mvp_power_iteration(mvp, dim, num_iters, rng)
 
-        vecs.append(vec)
-        vals.append(val)
+#         vecs.append(vec)
+#         vals.append(val)
 
-        # deflation
-        def mvp_deflated(v, _mvp=mvp, _val=val, _vec=vec):
-            return _mvp(v) - _val * (_vec @ v) * _vec
+#         # deflation
+#         def mvp_deflated(v, _mvp=mvp, _val=val, _vec=vec):
+#             return _mvp(v) - _val * (_vec @ v) * _vec
 
-        mvp = mvp_deflated
+#         mvp = mvp_deflated
 
-    return jnp.array(vals), jnp.stack(vecs, axis=1)
+#     return jnp.array(vals), jnp.stack(vecs, axis=1)
 
 def hutchinson_trace_estimate(mvp, dim, num_iters, rng):
     trace_estimate = 0.0
@@ -136,7 +153,7 @@ def kendall_tau(perm):
     for i in range(k):
         for j in range(i+1, k):
             count += (perm[i] > perm[j])
-    return count / total
+    return 1 - 2 * count / total
 
 @jax.jit
 def spectral_l2(lam1, lam2):
@@ -158,4 +175,4 @@ def wasserstein_1d(lam1, lam2):
     cdf_p = jnp.cumsum(p)
     cdf_q = jnp.cumsum(q)
 
-    return jnp.linalg.norm(cdf_p - cdf_q)
+    return jnp.sum(jnp.abs(cdf_p - cdf_q))
