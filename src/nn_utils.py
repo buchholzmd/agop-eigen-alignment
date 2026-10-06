@@ -46,7 +46,7 @@ def compute_neuron_cov_eigs(state, model, X, num_power_iters, rng, **kwargs):
 
     return result
 
-def compute_neuron_cov_intrinsic_dim(state, model, X, num_power_iters, rng, **kwargs):
+def compute_neuron_cov_stats(state, model, X, num_power_iters, rng, **kwargs):
     acts = kwargs.get("activations", get_activations(state, model, X))
     neuron_cov = kwargs.get("neuron_cov", {})
     mvps = neuron_cov_mvp(acts)
