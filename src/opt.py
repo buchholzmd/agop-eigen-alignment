@@ -23,11 +23,15 @@ class TrainState(struct.PyTreeNode):
       in your training loop.
     params: The parameters to be updated and used by ``apply_fn``.
     opt_step: Optimizer step.
+    parameterization: The parameterization scheme to use for gradient updates. 
+      Can be one of "standard", "ntk", "mup", or "spectral".
   """
   step: int
   apply_fn: Callable = struct.field(pytree_node=False)
   params: Any
   update_fn: Callable = struct.field(pytree_node=False)
+  parameterization: str = struct.field(pytree_node=False, default="standard")
+
 
   def apply_gradients(self, *, grads, **kwargs):
       """
@@ -36,7 +40,12 @@ class TrainState(struct.PyTreeNode):
       update_fn must have signature:
       new_params = update_fn(params, grads, **kwargs)
       """
-      new_params = self.update_fn(self.params, grads, **kwargs)
+      new_params = self.update_fn(
+          self.params, 
+          grads,
+          parameterization=self.parameterization,
+          **kwargs
+    )
 
       return self.replace(
           step=self.step + 1,
@@ -44,12 +53,13 @@ class TrainState(struct.PyTreeNode):
       )
   
   @classmethod
-  def create(cls, *, apply_fn, params, update_fn):
+  def create(cls, *, apply_fn, params, update_fn, parameterization="standard"):
       return cls(
           step=0,
           apply_fn=apply_fn,
           params=params,
           update_fn=update_fn,
+          parameterization=parameterization
       )
 
 def train(state, loss_fn, X, y, lr, steps, metrics_config):
@@ -60,6 +70,7 @@ def train(state, loss_fn, X, y, lr, steps, metrics_config):
 
     for t in pbar:
         traj.append(state.params)
+        prev_state = state # save state for computing metrics before update
 
         t0 = time.perf_counter()
         state, metric_dict = train_step(state, loss_fn, (X, y), lr)
@@ -68,7 +79,7 @@ def train(state, loss_fn, X, y, lr, steps, metrics_config):
         t_update = time.perf_counter() - t0
 
         step_metrics = compute_metrics(
-            state=state, 
+            state=prev_state, 
             metrics_config=metrics_config,
             activations=metric_dict['activations']
         )
@@ -83,14 +94,18 @@ def train(state, loss_fn, X, y, lr, steps, metrics_config):
         )
         
     traj.append(state.params)
-    return state, traj, metrics
 
-# def gd_update(params, grads, lr):
-#     return jax.tree_util.tree_map(
-#         lambda p, g: p - lr * g,
-#         params,
-#         grads
-#     )
+    # trailing evaluation at theta_steps
+    loss, acts = jax.jit(batch_loss(state.apply_fn, loss_fn, (X, y)))(state.params)
+    metrics.setdefault('loss', []).append(loss)
+
+    final_metrics = compute_metrics(state=state, metrics_config=metrics_config,
+                                    activations=acts)
+    for name, result in final_metrics.items():
+        for k, v in result.items():
+            metrics.setdefault(name, {}).setdefault(k, []).append(v)
+
+    return state, traj, metrics
 
 def gd_update(params, grads, lr, parameterization="standard"):
     new_params = []
@@ -100,27 +115,29 @@ def gd_update(params, grads, lr, parameterization="standard"):
         W, b = p["weights"], p["bias"]
         gW, gb = g["weights"], g["bias"]
 
-        fan_in, fan_out = W.shape
+        fan_out, fan_in = W.shape
 
         if parameterization == "standard":
-            lr_scale = 1.0
+            lr_w, lr_b = 1.0, 1.0
 
         elif parameterization == "ntk":
-            lr_scale = 1.0 / fan_in
+            lr_w, lr_b = 1.0 / fan_in, 1.0
 
         elif parameterization == "mup":
             if layer_idx == 0:
                 # input layer: d -> m
-                lr_scale = fan_out / fan_in
+                lr_w = float(fan_out)
             elif layer_idx == L - 1:
                 # output layer: m -> 1
-                lr_scale = 1.0 / fan_in
+                lr_w = 1.0 / fan_in
             else:
                 # hidden layer: m -> m
-                lr_scale = 1.0
+                lr_w = 1.0
+            lr_b = float(fan_out)
 
         elif parameterization == "spectral":
-            lr_scale = fan_out / fan_in
+            lr_w = fan_out / fan_in
+            lr_b = 1.0
 
         else:
             raise ValueError(
@@ -128,8 +145,8 @@ def gd_update(params, grads, lr, parameterization="standard"):
             )
         
         new_params.append({
-            "weights": W - lr * lr_scale * gW,
-            "bias": b - lr * gb
+            "weights": W - lr * lr_w * gW,
+            "bias":    b - lr * lr_b * gb
         })
 
     return new_params
