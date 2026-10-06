@@ -63,7 +63,7 @@ class MLP:
                 )
 
             W = jr.normal(w_key, (fan_out, fan_in)) * sigma_w
-            b = jr.normal(b_key, (fan_out,)) * sigma_w
+            b = jnp.zeros((fan_out,))
             
             self.params.append({
                 "weights": W,
@@ -81,10 +81,6 @@ class MLP:
         for i, layer in enumerate(params[init_layer:-1], init_layer):
             w, b = layer["weights"], layer["bias"]
             x = self.activation(x @ w.T + b)
-            # if self.parameterization == 'ntk':
-            #     x = x / jnp.sqrt(w.shape[0])
-            # elif self.parameterization == 'mup':
-            #     x = x / jnp.sqrt(w.shape[1])
             
             if return_activations:
                 activations.append(x)
