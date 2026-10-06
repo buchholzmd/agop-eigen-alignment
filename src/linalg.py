@@ -38,7 +38,7 @@ def compute_topk_eigs(matrix_fn, dim, k, num_iters, rng):
     Q = jax.lax.fori_loop(0, num_iters, body, Q_k)
 
     M = Q.T @ matrix_fn(Q)
-    eigvals, eigvecs = jnp.linalg.eigh(M)
+    eigvals, eigvecs = jnp.linalg.eigh((M + M.T) / 2)
     return eigvals[::-1], Q @ eigvecs[:, ::-1]
 
 def mvp_power_iteration(matrix_fn, dim, num_iters, rng):
@@ -51,24 +51,6 @@ def mvp_power_iteration(matrix_fn, dim, num_iters, rng):
 
     mu = b_k.dot(matrix_fn(b_k)) / jnp.linalg.norm(b_k)**2
     return mu, b_k
-
-# def compute_topk_eigs(mvp, dim, k, num_iters, rng):
-#     vecs = []
-#     vals = []
-
-#     for _ in range(k):
-#         val, vec = mvp_power_iteration(mvp, dim, num_iters, rng)
-
-#         vecs.append(vec)
-#         vals.append(val)
-
-#         # deflation
-#         def mvp_deflated(v, _mvp=mvp, _val=val, _vec=vec):
-#             return _mvp(v) - _val * (_vec @ v) * _vec
-
-#         mvp = mvp_deflated
-
-#     return jnp.array(vals), jnp.stack(vecs, axis=1)
 
 def hutchinson_trace_estimate(mvp, dim, num_iters, rng):
     trace_estimate = 0.0
