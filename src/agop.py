@@ -5,7 +5,7 @@ import jax.scipy.linalg as jla
 
 from functools import partial
 
-from linalg import align_bases, matrix_cosine, mvp_power_iteration, compute_topk_eigs
+from linalg import align_bases, matrix_cosine, compute_topk_eigs
 
 @partial(jax.jit, static_argnums=(1,))
 def agop(params, model, X, activations=None):
@@ -51,14 +51,14 @@ def compute_nfm(state, **kwargs):
     return W.T @ W
 
 def compute_nfm_eigs(state, k, rng, num_power_iters=None, **kwargs):
+    W = state.params[0]['weights']
+    dim = W.shape[1]
+    
     if num_power_iters is not None:
-        W = state.params[0]['weights']
-        dim = W.shape[1]
         eigvals, eigvecs = compute_topk_eigs(lambda v: W.T @ (W @ v), dim, k, num_power_iters, rng)
     else:
-        nfm = kwargs.get("nfm", compute_nfm(state, **kwargs))
-        eigvals, eigvecs = jla.eigh(nfm)
-        eigvals, eigvecs = eigvals[::-1][:k], eigvecs[:, ::-1][:, :k]
+        _, sv, Vh = jnp.linalg.svd(W, full_matrices=False)
+        eigvals, eigvecs = sv[:k] ** 2, Vh[:k].T
 
     return {"eigvals": eigvals, "eigvecs": eigvecs}
 
