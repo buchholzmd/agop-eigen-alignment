@@ -23,20 +23,14 @@ def neuron_covariance(state, model=None, X=None, activations=None, **kwargs):
         activations = get_activations(state, model, X)
     return [A.T @ A / A.shape[0] for A in activations[1:]]
 
+@jax.jit
+def _cov_mvp(A, v):
+    """v -> A^T A v / n.  `A` is an ARGUMENT, not a captured constant, so this
+    compiles once per (shape, dtype) rather than once per call."""
+    return A.T @ (A @ v) / A.shape[0]
+
 def neuron_cov_mvp(acts):
-    """acts = tuple of (n, d_i)"""
-
-    mvps = []
-    for A in acts[1:]:
-        def make_mvp(A):
-            @jax.jit
-            def mvp(v):
-                return A.T @ (A @ v) / A.shape[0]
-            return mvp
-
-        mvps.append(make_mvp(A))
-
-    return mvps
+    return [partial(_cov_mvp, A) for A in acts[1:]]
 
 def compute_neuron_cov_eigs(state, model, X, num_power_iters, rng, **kwargs):
     acts = kwargs.get("activations", get_activations(state, model, X))
