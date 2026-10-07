@@ -1,5 +1,7 @@
 extends: base.yaml
 name: param_sweep
+optim:
+  lr_mode: absolute          # the grid below is absolute, as in the notebook
 sweep:
   model.parameterization: [standard, ntk, mup]
-  optim.lr: [0.5, 0.9, 1.2, 2.0]
+  optim.lr: linspace(0.0001, 1.0, 101)
