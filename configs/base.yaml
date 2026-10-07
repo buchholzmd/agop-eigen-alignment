@@ -1,0 +1,37 @@
+# Base experiment configuration.
+# Sweep files inherit from this with `extends: base.yaml` and override single keys.
+name: nfa_phase
+
+data:
+  n: 128            # training samples
+  d: 3              # ambient input dimension
+  r: 3              # index-subspace dimension
+  noise: 0.001      # label noise std, applied AFTER normalization
+  normalize: rms    # 'rms' | 'none' | a float (analytic scale)
+  seed: 33
+
+target:
+  basis: monomial   # 'monomial' | 'hermite'
+  normalize: false  # hermite only: He_k (false) vs h_k = He_k/sqrt(k!) (true)
+  coeffs: [4.0, 3.0, 2.0]
+  orders: [3, 2, 1] # 1-D per-coordinate orders -> alpha = diag(orders)
+
+model:
+  width: 1000
+  depth: 2                      # number of weight layers; 2 => [d, m, 1]
+  parameterization: standard    # standard | ntk | mup | spectral
+
+optim:
+  steps: 250
+  lr_mode: relative   # 'relative' => lr multiplies eta_crit; 'absolute' => lr used as-is
+  lr: 1.0
+
+metrics:
+  num_power_iters: 30
+  every: 1
+
+wandb:
+  enabled: true
+  project: agop-eigen-alignment
+  entity: buchholzmd-team
+  mode: online        # online | offline | disabled
