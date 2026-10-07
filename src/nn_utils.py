@@ -46,7 +46,7 @@ def compute_neuron_cov_eigs(state, model, X, num_power_iters, rng, **kwargs):
 
     return result
 
-def compute_neuron_cov_stats(state, model, X, num_power_iters, rng, **kwargs):
+def compute_neuron_cov_stats(state, model, X, num_power_iters, rng, dense_max=2048, **kwargs):
     acts = kwargs.get("activations", get_activations(state, model, X))
     neuron_cov = kwargs.get("neuron_cov", {})
     mvps = neuron_cov_mvp(acts)
@@ -54,6 +54,15 @@ def compute_neuron_cov_stats(state, model, X, num_power_iters, rng, **kwargs):
     result = {}
     for i, (A, mvp) in enumerate(zip(acts[1:], mvps)):
         dim = A.shape[1]
+        n, m = A.shape
+        if min(n, m) <= dense_max:
+            # A^T A and A A^T share their nonzero spectrum: form the smaller one and
+            # read the stats off exactly, instead of Hutchinson-estimating the traces.
+            M = (A @ A.T) if m > n else (A.T @ A)
+            lam = jnp.linalg.eigvalsh(M / n)[::-1]
+            result[f"layer{i+1}_intrinsic_dim"] = lam.sum() / lam[0]
+            result[f"layer{i+1}_stable_rank"] = (lam ** 2).sum() / lam[0] ** 2
+            continue
         max_eigval = neuron_cov.get(f"layer{i+1}_max_eigvals", None)
         result[f"layer{i+1}_intrinsic_dim"] = intrinsic_dim(
             mvp, dim, num_power_iters, rng, max_eigval=max_eigval
