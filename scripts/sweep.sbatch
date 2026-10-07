@@ -4,7 +4,7 @@
 set -euo pipefail
 
 module load python/3.12 cuda cudnn
-source ~/venvs/agop/bin/activate
+source ~/jax_env/bin/activate
 
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 # WANDB_API_KEY comes from the environment (`wandb login` or a secret), never from the config.
