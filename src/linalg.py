@@ -28,6 +28,9 @@ def compute_topk_eigs(matrix_fn, dim, k, num_iters, rng):
     '''
     Compute the top-k eigenvalues and eigenvectors of a matrix using orthogonal iteration.
     '''
+    if k >= dim:
+        num_iters = 0   # Q spans R^dim already; the Rayleigh-Ritz step below is exact
+
     Q_k = stiefel(dim, k, rng).T
     matrix_fn = jax.vmap(matrix_fn, in_axes=1, out_axes=1)
 
