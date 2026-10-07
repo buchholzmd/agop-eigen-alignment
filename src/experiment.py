@@ -37,8 +37,17 @@ def build_data(cfg, rng):
     n, d, r = get_in(cfg, "data.n"), get_in(cfg, "data.d"), get_in(cfg, "data.r")
     X = jr.normal(rng.next(), (n, d))
 
-    coeffs = jnp.asarray(get_in(cfg, "target.coeffs"))
-    orders = jnp.asarray(get_in(cfg, "target.orders"))
+    coeffs = jnp.asarray(get_in(cfg, "target.coeffs"), dtype=jnp.float32)
+    orders = jnp.asarray(get_in(cfg, "target.orders"), dtype=jnp.int32)
+    # Span all r latent directions: cycle the exponent pattern, and continue the
+    # coefficient list's own power law k^-s past its length.  Without this the target
+    # silently ignores coordinates len(orders)..r-1, so every swept r trains an r=3
+    # target.  Renormalizing to ||c||_2 = 1 makes E[f*^2] = 1 analytically at every r.
+    if r > coeffs.shape[0]:
+        s = -jnp.log(coeffs[1] / coeffs[0]) / jnp.log(2.0)
+        coeffs = coeffs[0] * jnp.arange(1, r + 1, dtype=coeffs.dtype) ** -s
+    coeffs = coeffs[:r] / jnp.linalg.norm(coeffs[:r])
+    orders = orders[jnp.arange(r) % orders.shape[0]]
     alpha  = jnp.diag(orders)                      # 1-D orders == one term per coordinate
     g = lambda z: poly(alpha, coeffs, z,
                        basis=get_in(cfg, "target.basis"),
@@ -130,7 +139,11 @@ def log_run_to_wandb(out):
                 ntk_lambda0=out["ntk_lambda0"], hess_lambda0=out["hess_lambda0"])
     run = wandb.init(entity=get_in(cfg, "wandb.entity"), project=get_in(cfg, "wandb.project"),
                      name=cfg.get("_wandb_name") or run_name(cfg), group=group_name(cfg), config=cfgf,
-                     mode=get_in(cfg, "wandb.mode"), reinit=True)
+                     mode=get_in(cfg, "wandb.mode"),
+                     tags=get_in(cfg, "wandb.tags") or None,
+                     notes=get_in(cfg, "wandb.notes") or None,
+                     job_type=get_in(cfg, "wandb.job_type"),
+                     reinit=True)
     m, r = out["metrics"], out["r"]
     for t in range(len(m["loss"])):
         row = {

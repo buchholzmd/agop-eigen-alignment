@@ -7,14 +7,24 @@ data:
   d: 3              # ambient input dimension
   r: 3              # index-subspace dimension
   noise: 0.001      # label noise std, applied AFTER normalization
-  normalize: rms    # 'rms' | 'none' | a float (analytic scale)
+  normalize: none   # 'rms' | 'none'.  'none' because target.coeffs below already give
+                    # E[f*^2] = 1 exactly; the n-sample 'rms' estimator would only add
+                    # O(1/sqrt(n)) jitter and make the scale depend on the training X.
   seed: 33
 
 target:
-  basis: monomial   # 'monomial' | 'hermite'
-  normalize: false  # hermite only: He_k (false) vs h_k = He_k/sqrt(k!) (true)
-  coeffs: [4.0, 3.0, 2.0]
-  orders: [3, 2, 1] # 1-D per-coordinate orders -> alpha = diag(orders)
+  basis: hermite    # 'monomial' | 'hermite'
+  normalize: true   # hermite only: He_k (false) vs h_k = He_k/sqrt(k!) (true)
+  # In the ORTHONORMAL Hermite basis the coefficients are the experiment:
+  #   E[f*^2]  = sum_k c_k^2           (no d or r factor: z = Ux ~ N(0, I_r) exactly)
+  #   G*       = U^T diag(c_k^2 p_k) U (exact, diagonal -- so the alignment ceiling is 1)
+  # Unit 2-norm => RMS = 1 at every r, which keeps loss, SNR and eta_crit comparable
+  # across the sweep.  c_k ~ k^-0.5; build_data continues that law when data.r > 3.
+  coeffs: [0.738549, 0.522233, 0.426401]
+  # Information exponents, cycled to r.  NOT [3,2,1]: two directions with p=1 both
+  # carry a constant gradient term, which puts an off-diagonal block in G* and makes
+  # them individually unrecoverable (ceiling 0.889 at r=6).  [4,3,2] has none at any r.
+  orders: [4, 3, 2]
 
 model:
   width: 1000
@@ -32,6 +42,23 @@ metrics:
 
 wandb:
   enabled: true
-  project: agop-eigen-alignment
   entity: buchholzmd-team
-  mode: online        # online | offline | disabled
+  project: agop-eigen-alignment
+  mode: online              # online | offline | disabled
+  tags: []                  # e.g. [fir, gpu] -- filterable in the W&B UI
+  notes: ""
+  job_type: sweep
+  # NOTE: no API key here. Secrets do not belong in a committed file.
+  #   export WANDB_API_KEY=...   (or run `wandb login` once)
+
+paths:
+  outputs: outputs          # artifacts, relative to the repo root
+  cache: outputs/_wandb_cache   # dashboard parquet cache
+
+slurm:                      # read by scripts/submit.sh, passed to sbatch on the CLI
+  account: def-YOURPI       # sacctmgr show user $USER withassoc format=account
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "3:00:00"
+  array: "0-63%16"          # 64 tasks, at most 16 concurrent

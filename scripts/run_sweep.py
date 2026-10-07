@@ -41,12 +41,13 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--chunk", type=int, default=0)
     ap.add_argument("--nchunks", type=int, default=1)
-    ap.add_argument("--outdir", default=os.path.join(ROOT, "outputs"))
+    ap.add_argument("--outdir", default=None, help="overrides paths.outputs from the config")
     ap.add_argument("--no-wandb", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="list work, run nothing")
     a = ap.parse_args()
 
     base = load_config(a.config)
+    outdir = a.outdir or os.path.join(ROOT, get_in(base, "paths.outputs"))
     cells = [expand_dr(c) for c in expand(base)]
     cells = [c for c in cells if feasible(c)[0]]
     mine = cells[a.chunk::a.nchunks]            # strided: spreads the slow cells across tasks
@@ -64,7 +65,7 @@ def main():
 
     from experiment import run_one
 
-    root = pathlib.Path(a.outdir) / base.get("name", "sweep")
+    root = pathlib.Path(outdir) / base.get("name", "sweep")
     for ci, cfg in enumerate(mine):
         cid = cell_id(cfg)
         cdir = root / cid
