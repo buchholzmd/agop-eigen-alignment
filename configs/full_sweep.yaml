@@ -3,7 +3,7 @@ name: full_sweep
 
 optim:
   lr_mode: absolute
-  steps: 250
+  steps: 1000
 
 # Axes other than lr. The lr axis is handled by the runner's ascending early-exit
 # scan (see scripts/run_sweep.py) so diverged learning rates are never executed.
@@ -19,7 +19,7 @@ lr_scan:
   values: logspace          # 1.58x spacing; a linear grid puts 98/101 points in the nan regime
   lo: 0.0001
   hi: 1.0
-  num: 21
+  num: 51
   stop_after_diverged: 2    # stop a cell after this many consecutive diverged lrs
 
 # Skip configurations that cannot finish in reasonable time/memory.

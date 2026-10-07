@@ -8,6 +8,8 @@ set -euo pipefail
 CFG="${1:-full_sweep.yaml}"
 cd "$(dirname "$0")/.."
 
+source ~/jax_env/bin/activate
+
 get() { python -c "
 import sys; sys.path.insert(0,'src')
 from config import load_config, get_in
