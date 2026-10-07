@@ -56,7 +56,7 @@ paths:
   cache: outputs/_wandb_cache   # dashboard parquet cache
 
 slurm:                      # read by scripts/submit.sh, passed to sbatch on the CLI
-  account: def-YOURPI       # sacctmgr show user $USER withassoc format=account
+  account: def-schmidtm       # sacctmgr show user $USER withassoc format=account
   gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
   cpus_per_task: 3
   mem: 70G

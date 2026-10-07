@@ -31,7 +31,7 @@ dist/
 .env.*
 
 # Outputs
-output/*
+outputs/*
 
 # Weights & Biases
 wandb/*
@@ -43,3 +43,5 @@ temp/
 
 # OS trash
 .Trashes
+
+uv.lock
