@@ -12,5 +12,5 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 cd "$SLURM_SUBMIT_DIR"
 python scripts/run_sweep.py \
     --config "${SWEEP_CONFIG:-full_sweep.yaml}" \
-    --chunk "$SLURM_ARRAY_TASK_ID" \
-    --nchunks "$SLURM_ARRAY_TASK_COUNT"
+    --chunk "${SLURM_ARRAY_TASK_ID:-0}" \
+    --nchunks "${SLURM_ARRAY_TASK_COUNT:-1}"

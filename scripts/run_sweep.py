@@ -24,11 +24,14 @@ from config import load_config, expand, flatten, get_in
 from sweep_utils import expand_dr, lr_grid, feasible, is_diverged
 
 
-def descriptive_name(cfg, lr):
-    """W&B run title carrying everything that identifies the point in the grid."""
-    return (f"lr={lr:.5g}__param={get_in(cfg,'model.parameterization')}"
-            f"__m={get_in(cfg,'model.width')}__d={get_in(cfg,'data.d')}"
-            f"__r={get_in(cfg,'data.r')}__n={get_in(cfg,'data.n')}")
+PARAM_ABBREV = {"standard": "sp", "ntk": "ntk", "mup": "mup", "spectral": "spec"}
+
+
+def descriptive_name(cfg, lr_index):
+    """Short W&B run title. Every hyperparameter is already in the logged config
+    and filterable there, so the name only has to identify the point."""
+    param = PARAM_ABBREV[get_in(cfg, "model.parameterization")]
+    return f"{param}-m{get_in(cfg,'model.width')}-lr{lr_index:02d}"
 
 
 def cell_id(cfg):
@@ -76,11 +79,10 @@ def main():
 
         print(f"[cell {ci+1}/{len(mine)}] {cid}", flush=True)
         consecutive, executed, t0 = 0, 0, time.time()
-        for lr in lrs:
+        for lr_index, lr in enumerate(lrs):
             one = json.loads(json.dumps(cfg))        # deep copy, no shared state
             one["optim"]["lr"] = float(lr)
-            one["optim"]["lr_mode"] = "absolute"
-            one["_wandb_name"] = descriptive_name(cfg, lr)
+            one["_wandb_name"] = descriptive_name(cfg, lr_index)
             tag = one["_wandb_name"]
             rdir = cdir / f"lr={lr:.5g}"
             if (rdir / "done.json").exists():

@@ -1,0 +1,38 @@
+# How subspace recovery depends on learning rate, width and parameterization.
+# One target: d=128, r=4, n=4096 -- enough samples that the empirical target AGOP
+# itself recovers U at ~0.99, so the measurement is not sample-floor limited.
+extends: base.yaml
+name: subspace-recovery
+
+data:   {n: 4096, d: 128, r: 4, noise: 0.001, normalize: none, seed: 33}
+model:  {depth: 2}
+optim:  {steps: 500, lr_mode: relative}
+metrics: {num_power_iters: 30, every: 1}
+
+sweep:
+  model.parameterization: [standard, ntk, mup, spectral]
+  model.width: [4, 64, 512, 4096]
+
+# Relative to eta_crit = 2/lambda_max(H). eta_crit moves ~15x across these cells,
+# so an absolute grid lands in a different regime at every width.
+lr_scan:
+  values: linspace
+  lo: 0.1
+  hi: 5.0
+  num: 51
+  stop_after_diverged: 2
+
+limits:
+  max_params: 100000000
+  max_act_bytes: 4000000000
+  max_n_times_m: 1000000000
+  min_capacity: 1
+  max_capacity: 1000
+
+slurm:
+  account: def-YOURPI
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "6:00:00"
+  array: "0-15%16"
