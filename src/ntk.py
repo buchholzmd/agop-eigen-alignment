@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 
 from functools import partial
-from linalg import mvp_power_iteration
 
 try:
     import neural_tangents as nt
@@ -28,12 +27,3 @@ def nvp(params, model, X, v):
     _, Kv = jax.jvp(lambda p: model.apply_fn(p, X).squeeze(), (params,), (u,)) # J u
 
     return Kv / X.shape[0]
-
-def compute_ntk_eigs(state, model, X, num_power_iters, rng, **kwargs):
-    eigval, eigvec = mvp_power_iteration(
-        lambda v: nvp(state.params, model, X, v),
-        X.shape[0],
-        num_power_iters,
-        rng
-    )
-    return {"max_eigvals": eigval, "max_eigvecs": eigvec}
