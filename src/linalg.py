@@ -176,27 +176,24 @@ def wasserstein_1d(lam1, lam2):  # the actual W1
     p, q = _to_prob(lam1), _to_prob(lam2)
     return jnp.sum(jnp.abs(jnp.cumsum(p) - jnp.cumsum(q)))
 
-@partial(jax.jit, static_argnums=(2,))
-def subspace_angles(W, U, k):
-    """Principal angles between the top-k right singular subspace of W and row(U).
+@jax.jit
+def subspace_angles(A, U):
+    """Principal angles between row(A) and row(U), both orthonormal frames.
 
-    W : (m, d)  first layer weights, or any frame whose row space we want
-    U : (r, d)  orthonormal target directions, one per row
-    k : number of right singular vectors of W to keep
+    A : (k, d) orthonormal rows -- top-k eigenvectors of the NFM or AGOP, transposed
+    U : (r, d) orthonormal rows -- the target directions
 
-    A is the top-k right singular subspace of W, with orthonormal rows. It reduces
-    to the polar factor G_W^{-1/2} W when k = m <= d, but stays well defined when
-    m >= d, where row(W) is all of R^d and every alignment is trivially 1.
+    The caller passes a frame that has already been computed (nfm_eigs/agop_eigs),
+    so nothing is decomposed here. The top-k eigenvectors of W^T W ARE the top-k
+    right singular vectors of W, so an svd(W) would be redundant work.
 
     C = A U^T is the cosine matrix: its singular values are the cosines of the
-    principal angles, and Align(W, u_j) = ||A u_j||^2 is the j-th column sum of C^2.
+    principal angles, and Align(A, u_j) = ||A u_j||^2 is the j-th column sum of C^2.
 
     sin_max is sqrt(1 - cos_min^2), NOT the top singular value of A U_perp^T: when
-    k > r that matrix has singular values equal to 1 for directions of row(W) lying
+    k > r that matrix has singular values equal to 1 for directions of row(A) lying
     entirely outside row(U), which says nothing about the principal angles.
     """
-    _, _, Vh = jnp.linalg.svd(W, full_matrices=False)
-    A = Vh[:k]
     C = A @ U.T
     cosines = jnp.linalg.svd(C, compute_uv=False)
     alignment = (C ** 2).sum(axis=0)

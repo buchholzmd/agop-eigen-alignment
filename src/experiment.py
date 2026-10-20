@@ -91,15 +91,15 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng,
         "neuron_cov_int_dim":  {"fn": metrics.neuron_cov_stats,  "args": (model, X, 50*num_power_iters, rng)},
         "agop":                {"fn": metrics.agop,              "args": (model, X)},
         "nfm":                 {"fn": metrics.nfm},
-        "agop_eigs":           {"fn": metrics.agop_eigs,         "args": (model, X, r, rng, 10*num_power_iters)},
-        "nfm_eigs":            {"fn": metrics.nfm_eigs,          "args": (r, rng, 10*num_power_iters)},
+        "agop_eigs":           {"fn": metrics.agop_eigs,         "args": (model, X, r, rng)},
+        "nfm_eigs":            {"fn": metrics.nfm_eigs,          "args": (r, rng)},
         "nfa_correlation":     {"fn": metrics.nfa_cosine},
         "nfa_eigen_alignment": {"fn": metrics.nfa_alignment},
     }
     if U is not None:
         metrics_config["target"]   = {"fn": metrics.target_alignment,
                                       "args": (target_agop, target_eigvals, target_eigvecs, U)}
-        metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U, r)}
+        metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U,)}
     return metrics_config
 
 def run_one(cfg, log_wandb=None):

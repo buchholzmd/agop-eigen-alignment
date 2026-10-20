@@ -171,12 +171,17 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, U, **kw
         "rayleigh_ratio": rayleigh / (target_eigvals + 1e-12),
     }
 
-def subspace_recovery(state, U, k, **kwargs):
-    """Principal angles to the target subspace, measured from W1 and from the AGOP."""
-    W = state.params[0]["weights"]
+def subspace_recovery(state, U, **kwargs):
+    """Principal angles to the target subspace, from the NFM and from the AGOP.
+
+    Both frames come straight out of nfm_eigs / agop_eigs, which must sit above
+    this entry in metrics_config.
+    """
+    nfm_eigvecs  = kwargs["nfm_eigs"]["eigvecs"]
     agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
 
-    result = {f"nfm_{name}":  value for name, value in subspace_angles(W, U, k).items()}
+    result = {f"nfm_{name}":  value
+              for name, value in subspace_angles(nfm_eigvecs.T, U).items()}
     result.update({f"agop_{name}": value
-                   for name, value in subspace_angles(agop_eigvecs.T, U, k).items()})
+                   for name, value in subspace_angles(agop_eigvecs.T, U).items()})
     return result
