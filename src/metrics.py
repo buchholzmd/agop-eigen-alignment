@@ -19,7 +19,7 @@ from ntk import nvp
 from hess import _hvp_flat
 from linalg import (align_bases, matrix_cosine, topk_eigs, mvp_power_iteration,
                     intrinsic_dim, stable_rank, subspace_angles, wasserstein_1d,
-                    nuclear)
+                    nuclear, row_space_cosines)
 
 def agop(state, model, X, layers=(0,), **kwargs):
     return nn_agop(state.params, model, X,
@@ -185,3 +185,9 @@ def subspace_recovery(state, U, **kwargs):
     result.update({f"agop_{name}": value
                    for name, value in subspace_angles(agop_eigvecs.T, U).items()})
     return result
+
+def row_space_recovery(state, **kwargs):
+    """NFM and AGOP against the projector onto row(W1). Needs "agop" above it."""
+    W = state.params[0]["weights"]
+    G = kwargs["agop"]["layer1_agop"]
+    return row_space_cosines(W, G)

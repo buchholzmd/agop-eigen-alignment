@@ -195,14 +195,48 @@ def subspace_angles(A, U):
     entirely outside row(U), which says nothing about the principal angles.
     """
     C = A @ U.T
+    alignment = (C ** 2).sum(axis=0) # Ben Arous metric
+
     cosines = jnp.linalg.svd(C, compute_uv=False)
-    alignment = (C ** 2).sum(axis=0)
+    sines   = jnp.sqrt(jnp.clip(1.0 - cosines ** 2, 0.0)) # Zhu metric
 
     return {
         "alignment":        alignment,
         "mean_alignment":   alignment.mean(),
         "cos_max":          cosines[0],
-        "cos_min":          cosines[-1],
-        "sin_max":          jnp.sqrt(jnp.clip(1.0 - cosines[-1] ** 2, 0.0)),
-        "projection_error": jnp.linalg.norm(A.T @ A - U.T @ U) / jnp.sqrt(2.0 * U.shape[0]),
+        "sin_max":          sines[0],
+        "subspace_dist":    jnp.sqrt(jnp.sum(sines ** 2)),
+    }
+
+
+@jax.jit
+def row_space_cosines(W, G):
+    """How close the NFM and the AGOP are to the projector onto row(W).
+
+    P_W is the orthogonal projector onto row(W). If W were semi-orthogonal then
+    W^T W would BE P_W, so cos(P_W, W^T W) measures how far W is from semi-
+    orthogonal -- structurally the same statement as the NFA, which measures how
+    far D is from identity in G = W^T D W.
+
+    Neither P_W nor (W W^T)^-1 is formed. P_W is d x d, and (W W^T)^-1 does not
+    exist once m > d: jnp.linalg.inv does not raise there, it returns garbage at
+    condition number ~1e18. Everything is read off the SVD of W instead, using
+
+        cos(P_W, W^T W) = sqrt(stable_rank(W^T W) / rank(W))
+
+    which is exact, and  tr(P_W G) = tr(Q G Q^T) with Q the right singular
+    vectors, which never leaves k x k.
+
+    nfm_cosine is 1 iff the nonzero singular values of W are all equal. Lower
+    means a spikier NFM spectrum, i.e. the network has concentrated its features.
+    """
+    _, sv, Vh = jnp.linalg.svd(W, full_matrices=False)   # Vh: (k, d), k = min(m, d)
+    k = Vh.shape[0]
+    lam = sv ** 2
+    stable_rank = lam.sum() ** 2 / ((lam ** 2).sum() + 1e-30)
+
+    return {
+        "nfm_cosine":  jnp.sqrt(stable_rank / k),
+        "agop_cosine": jnp.trace(Vh @ G @ Vh.T) / (jnp.sqrt(k) * jnp.linalg.norm(G) + 1e-30),
+        "stable_rank": stable_rank,
     }

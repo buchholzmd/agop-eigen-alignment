@@ -93,6 +93,7 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng,
         "nfm":                 {"fn": metrics.nfm},
         "agop_eigs":           {"fn": metrics.agop_eigs,         "args": (model, X, r, rng)},
         "nfm_eigs":            {"fn": metrics.nfm_eigs,          "args": (r, rng)},
+        "row_space":           {"fn": metrics.row_space_recovery},
         "nfa_correlation":     {"fn": metrics.nfa_cosine},
         "nfa_eigen_alignment": {"fn": metrics.nfa_alignment},
     }
@@ -175,6 +176,9 @@ def log_run_to_wandb(out):
             # NFM, against the AGOP (the literal Neural Feature Ansatz)
             "nfm/cosine_to_agop": float(m["nfa_correlation"]["matrix_correlation"][t]),
             "nfm/mean_alignment": float(matched[t].mean()),
+            "nfm/projector_cosine":  float(m["row_space"]["nfm_cosine"][t]),
+            "nfm/stable_rank":       float(m["row_space"]["stable_rank"][t]),
+            "nfm/agop_projector_cosine": float(m["row_space"]["agop_cosine"][t]),
 
             # Spectrum, against the target AGOP
             "spectrum/agop_cosine":    float(m["target"]["agop_cosine"][t]),
