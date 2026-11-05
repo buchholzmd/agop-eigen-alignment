@@ -52,8 +52,8 @@ wandb:
   #   export WANDB_API_KEY=...   (or run `wandb login` once)
 
 paths:
-  outputs: outputs          # artifacts, relative to the repo root
-  cache: outputs/_wandb_cache   # dashboard parquet cache
+  outputs: output           # artifacts, relative to the repo root
+  cache: output/_wandb_cache   # dashboard parquet cache
 
 slurm:                      # read by scripts/submit.sh, passed to sbatch on the CLI
   account: def-YOURPI       # sacctmgr show user $USER withassoc format=account

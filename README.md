@@ -5,6 +5,7 @@ This repository serves as a template for experiments.
 __Contents__:
 - [Introduction](#introduction)
 - [Dependencies](#dependencies)
+- [Running on Fir](#running-on-fir)
 - [Repository structure](#repository-structure)
 - [Running experiments](#running-experiments)
 - [Contact & attribution](#contact--attribution)
@@ -44,6 +45,85 @@ micromamba env update -n agop-eigen-alignment -f jax_env.yml --prune
 
 *Note: The current `jax_env.yml` contains all used packages. Remember to run `micromamba env export > jax_env.yml` when making changes.*
 
+### Fir (Alliance cluster)
+
+On Fir, use a virtual environment built from the Alliance wheelhouse instead of micromamba. Create it once, on a login node:
+
+```bash
+module load python/3.12.4
+python -m venv ~/jax_env
+source ~/jax_env/bin/activate
+python -m pip install --upgrade --no-index pip
+python -m pip install --no-index jax flax pillow matplotlib
+python -m pip install --no-index "jax[cuda]"        # installs jax-cuda12-pjrt, jax-cuda12-plugin
+python -m pip install --no-index optax pyyaml tqdm wandb ipython ipywidgets
+# python -m pip install --no-index pandas           # only needed for scripts/aggregate.py
+# avail_wheels --name "*pytorch*" --all_versions    # check out the available packages
+# python -m pip install --no-index gpytorch==1.13   # if needed, install a specific version
+wandb login                                         # once: saves your W&B API key to ~/.netrc
+deactivate
+```
+
+The SLURM scripts activate the environment at `~/jax_env`, so keep that path. Jobs log to W&B online, which works because Fir compute nodes have internet access.
+
+## Running on Fir
+
+Run everything from the repository root. `<SWEEP-NAME>.yaml` is a file in `configs/` (for example `configs/full_sweep.yaml`), and every sweep config extends `configs/base.yaml`.
+
+### From the command line
+
+For quick tests, run the sweep runner directly on a login node. Login nodes have no GPUs, so force JAX onto the CPU:
+
+```bash
+source ~/jax_env/bin/activate
+JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES="" python scripts/run_sweep.py --config full_sweep.yaml --chunk 0 --nchunks 438
+```
+
+The same run without W&B logging:
+
+```bash
+JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES="" python scripts/run_sweep.py --config full_sweep.yaml --chunk 0 --nchunks 438 --no-wandb
+```
+
+> **Note:** Setting `WANDB_MODE=offline` has no effect in this repo. The W&B mode comes from `wandb.mode` in the config, which is passed directly to `wandb.init` and takes precedence over the environment variable, for command-line runs and SLURM jobs alike. To log offline, set `wandb.mode: offline` in the config and upload the runs later with `wandb sync --sync-all` from the repository root.
+
+A *cell* is one point of the sweep grid with every axis except the learning rate fixed; each cell scans its learning rates in ascending order. `--nchunks N` splits the feasible cells into `N` strided chunks and `--chunk i` runs chunk `i`. `full_sweep.yaml` has 438 feasible cells, so `--nchunks 438` runs exactly one cell. Other flags:
+
+- `--dry-run` prints the number of feasible cells and lists the cells in the chunk, without running anything.
+- `--outdir DIR` writes results under `DIR` instead of `output/`.
+- `--no-wandb` turns off W&B logging.
+
+Results go to `output/<sweep name>/<cell>/lr=<lr>/done.json`. Finished learning rates and cells are skipped on reruns, including by the SLURM sweep. A test run into `output/` therefore means the sweep will skip that cell, so use `--outdir output/test` for throwaway runs.
+
+### Sweeps with SLURM
+
+Submit a whole sweep as a SLURM array job:
+
+```bash
+./scripts/submit.sh <SWEEP-NAME>.yaml      # e.g. ./scripts/submit.sh full_sweep.yaml
+```
+
+`scripts/submit.sh` reads the `slurm:` block of the config and submits `scripts/sweep.sbatch` with those settings. The defaults (account, GPU type, CPUs, memory, time limit, array) live in `configs/base.yaml`, and a sweep config can override any of them. Each array task gets its own GPU (an H100 MIG slice by default) and runs
+
+```bash
+python scripts/run_sweep.py --config <SWEEP-NAME>.yaml --chunk $SLURM_ARRAY_TASK_ID --nchunks $SLURM_ARRAY_TASK_COUNT
+```
+
+so the array size is the number of chunks. For one cell per task, set `slurm.array` to `"0-<N-1>%<K>"`, where `N` is the feasible-cell count from `--dry-run` and `K` caps how many tasks run at once. `full_sweep.yaml` uses `"0-437%16"`.
+
+> **Don't export the CPU flags before submitting.** `submit.sh` calls `sbatch --export=ALL`, so any variable exported in your shell (for example `export JAX_PLATFORMS=cpu`) is copied into every job and silently runs it on the CPU. The inline `VAR=value command` form used above is not exported, so it is safe.
+
+Monitor and manage the jobs:
+
+```bash
+squeue -u $USER                                                # TRES_PER_N shows the GPU type; N/A means no GPU
+grep -E '^jax|FAILED' output/slurm/agop-sweep-<jobid>_0.out   # should show CudaDevice and no FAILED lines
+sacct -j <jobid> -X --format=JobID,State,Elapsed               # find tasks that hit TIMEOUT
+scancel <jobid>                                                # cancel the whole array
+```
+
+Each task logs to `output/slurm/agop-sweep-<jobid>_<task>.out`. To finish tasks that hit the time limit, run the same `submit.sh` command again: completed cells and learning rates are skipped. Resubmit the whole array rather than single task IDs, because the chunk count comes from the array size.
+
 ## Repository structure
 
 ```
@@ -54,7 +134,7 @@ micromamba env update -n agop-eigen-alignment -f jax_env.yml --prune
 │   └── processed/
 ├── figures/
 ├── notebooks/
-├── outputs/
+├── output/
 ├── scripts/
 │   ├── run.sh
 │   └── submit_slurm.sh
@@ -69,7 +149,7 @@ micromamba env update -n agop-eigen-alignment -f jax_env.yml --prune
 - `data/` — Raw data (`original/`) and their polished/organized versions (`processed/`)
 - `figures/` — Generated figures
 - `notebooks/` — Jupyter notebooks for analysis and visualization
-- `outputs/` — Experiment results (JSON files)
+- `output/` — Experiment results (JSON files)
 - `scripts/` — Shell scripts for running experiments locally or on SLURM
 - `src/` — Source code:
   - `executor.py` — Reads config, selects parameters, and runs the experiment script
@@ -146,11 +226,11 @@ To submit experiments as a SLURM array job:
 ./scripts/submit_slurm.sh -n my_other_experiment
 ```
 
-Monitor jobs with `squeue -u $USER` and check logs in the `slurm.log_dir` specified in your config (default: `outputs/slurm_logs`).
+Monitor jobs with `squeue -u $USER` and check logs in the `slurm.log_dir` specified in your config (default: `output/slurm_logs`).
 
 ### Output
 
-Results are saved to the `output_dir` specified in the config (default: `outputs/`). Executor logs are saved to `log_dir` (default: `outputs/logs`). Output filenames are auto-generated from variable parameters:
+Results are saved to the `output_dir` specified in the config (default: `output/`). Executor logs are saved to `log_dir` (default: `output/logs`). Output filenames are auto-generated from variable parameters:
 
 ```
 {exp_name}__{param1}={value1}__{param2}={value2}.json
