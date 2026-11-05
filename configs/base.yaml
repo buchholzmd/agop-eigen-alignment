@@ -1,16 +1,24 @@
 # Base experiment configuration.
 # Sweep files inherit from this with `extends: base.yaml` and override single keys.
-name: nfa_phase
+name: base
 
 data:
   n: 128            # training samples
-  d: 3              # ambient input dimension
-  r: 3              # index-subspace dimension
+  d: 128            # ambient input dimension
+  r: 4              # index-subspace dimension
   noise: 0.001      # label noise std, applied AFTER normalization
   normalize: none   # 'rms' | 'none'.  'none' because target.coeffs below already give
                     # E[f*^2] = 1 exactly; the n-sample 'rms' estimator would only add
                     # O(1/sqrt(n)) jitter and make the scale depend on the training X.
   seed: 33
+  # Held-out validation set, drawn from its own seed so it is byte-identical
+  # across every run and independent of the training stream. No epsilon filter
+  # is needed: at d=128 the closest of 4e6 independent train/val pairs sits at
+  # distance ~11 against a typical 16, and P(||x-y|| < 0.1) is 1e-256.
+  # Labels are noiseless, so val_loss going to zero means the FUNCTION was
+  # recovered, with no irreducible noise floor in the way.
+  val_n: 4096
+  val_seed: 1234
 
 target:
   basis: hermite    # 'monomial' | 'hermite'
@@ -43,7 +51,7 @@ model:
   parameterization: standard    # standard | ntk | mup | spectral
 
 optim:
-  steps: 250
+  steps: 1000
   lr_mode: relative   # 'relative' => lr multiplies eta_crit; 'absolute' => lr used as-is
   lr: 1.0
 

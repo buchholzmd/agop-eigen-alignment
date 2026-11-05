@@ -1,0 +1,77 @@
+# The original toy configuration, kept so earlier runs stay reproducible.
+# New experiments start from base.yaml (n=128, d=128, r=4).
+# Base experiment configuration.
+# Sweep files inherit from this with `extends: base.yaml` and override single keys.
+name: orig-exp
+
+data:
+  n: 128            # training samples
+  d: 3              # ambient input dimension
+  r: 3              # index-subspace dimension
+  noise: 0.001      # label noise std, applied AFTER normalization
+  normalize: none   # 'rms' | 'none'.  'none' because target.coeffs below already give
+                    # E[f*^2] = 1 exactly; the n-sample 'rms' estimator would only add
+                    # O(1/sqrt(n)) jitter and make the scale depend on the training X.
+  seed: 33
+
+target:
+  basis: hermite    # 'monomial' | 'hermite'
+  normalize: true   # hermite only: He_k (false) vs h_k = He_k/sqrt(k!) (true)
+  # In the ORTHONORMAL Hermite basis the coefficients are the experiment:
+  #   E[f*^2]  = sum_k c_k^2           (no d or r factor: z = Ux ~ N(0, I_r) exactly)
+  #   G*       = U^T diag(c_k^2 p_k) U (exact, diagonal -- so the alignment ceiling is 1)
+  # Unit 2-norm => RMS = 1 at every r, which keeps loss, SNR and eta_crit comparable
+  # across the sweep.
+  #
+  # c_k ~ k^-alpha, built for whatever data.r is. alpha = 0 gives constant
+  # coefficients, so this one knob covers both target families and is sweepable.
+  # Ben Arous et al. (arXiv:2508.03688) split at alpha = 1/2: below it the student
+  # width matters only through phi = m/r, above it only in absolute terms. Do NOT
+  # use alpha = 0.5 -- both of their scaling laws degenerate exactly there.
+  alpha: 1.0
+  # Multi-index structure, as patterns broadcast over the r directions. A term
+  # maps a RELATIVE direction offset to a Hermite degree, so it is r-independent.
+  #   [{0: 2}]                 h_2(z_k)                          -- single quadratic link
+  #   [{0: 1}, {0: 2}]         h_1(z_k) + h_2(z_k)               -- Ben Arous (He_1+He_2)
+  #   [{0: 2}, {0: 1, 1: 1}]   h_2(z_k) + h_1(z_k) h_1(z_{k+1})  -- interacting
+  # A degree-1 term gives every direction information exponent 1, which puts an
+  # off-diagonal c_j c_k block in G*: directions stop being individually
+  # identifiable, but span(U) does not, so subspace metrics are unaffected.
+  terms: [{0: 2}]
+
+model:
+  width: 1000
+  depth: 2                      # number of weight layers; 2 => [d, m, 1]
+  parameterization: standard    # standard | ntk | mup | spectral
+
+optim:
+  steps: 250
+  lr_mode: relative   # 'relative' => lr multiplies eta_crit; 'absolute' => lr used as-is
+  lr: 1.0
+
+metrics:
+  num_power_iters: 30
+  every: 1
+
+wandb:
+  enabled: true
+  entity: buchholzmd-team
+  project: agop-eigen-alignment
+  mode: online              # online | offline | disabled
+  tags: []                  # e.g. [fir, gpu] -- filterable in the W&B UI
+  notes: ""
+  job_type: sweep
+  # NOTE: no API key here. Secrets do not belong in a committed file.
+  #   export WANDB_API_KEY=...   (or run `wandb login` once)
+
+paths:
+  outputs: output           # artifacts, relative to the repo root
+  cache: output/_wandb_cache   # dashboard parquet cache
+
+slurm:                      # read by scripts/submit.sh, passed to sbatch on the CLI
+  account: def-YOURPI       # sacctmgr show user $USER withassoc format=account
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "3:00:00"
+  array: "0-63%16"          # 64 tasks, at most 16 concurrent

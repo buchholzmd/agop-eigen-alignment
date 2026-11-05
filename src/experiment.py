@@ -70,12 +70,16 @@ def build_data(cfg, rng):
                        basis=get_in(cfg, "target.basis"),
                        normalize=get_in(cfg, "target.normalize"))
 
+    X_val = jr.normal(RNGKey(get_in(cfg, "data.val_seed")).next(),
+                      (get_in(cfg, "data.val_n"), d))
+
     target_fn, U, y = generate_multi_index_data(
         g, r=r, X=X, rng=rng,
         noise=get_in(cfg, "data.noise"),
         normalize=get_in(cfg, "data.normalize"),
     )
-    return X, y, U, target_fn, agop(target_fn, X)
+    y_val = jax.vmap(target_fn)(X_val)      # noiseless: val_loss -> 0 iff f is recovered
+    return X, y, X_val, y_val, U, target_fn, agop(target_fn, X)
 
 def build_model(cfg, rng):
     '''-> model, state, params0.  Sources: cells 7, 8, 9.'''
@@ -103,13 +107,14 @@ def critical_lr(state, model, X, y, loss_fn, rng, iters=30):
         pf.shape[0], iters, rng)
     return float(ntk_lambda0), float(hess_lambda0), 2.0 / float(hess_lambda0)
 
-def make_metrics_config(cfg, model, X, y, loss_fn, rng,
+def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
                         U=None, target_agop=None, target_eigvals=None, target_eigvecs=None):
     '''Verbatim from multi-index.ipynb cell 34, wrapped so each run builds its own.'''
     r = get_in(cfg, 'data.r')
     num_power_iters = get_in(cfg, 'metrics.num_power_iters')
     
     metrics_config = {
+        "val":                 {"fn": metrics.val_loss,          "args": (loss_fn, X_val, y_val)},
         "ntk":                 {"fn": metrics.ntk_eigs,          "args": (model, X, num_power_iters, rng)},
         "hessian":             {"fn": metrics.hessian_eigs,      "args": (loss_fn, X, y, num_power_iters, rng)},
         "sparsity":            {"fn": metrics.neuron_sparsity,   "args": (model, X)},
@@ -130,7 +135,7 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng,
 def run_one(cfg, log_wandb=None):
     '''Execute one configuration end to end. -> dict with traces, constants and artifacts.'''
     rng = RNGKey(get_in(cfg, "data.seed"))
-    X, y, U, target_fn, G_star = build_data(cfg, rng)
+    X, y, X_val, y_val, U, target_fn, G_star = build_data(cfg, rng)
     model, state, params0 = build_model(cfg, rng)
     loss_fn = lambda outputs, targets: 2 * l2_loss(outputs, targets)
 
@@ -144,7 +149,8 @@ def run_one(cfg, log_wandb=None):
     target_eigvals = target_eigvals[::-1][:r]
     target_eigvecs = target_eigvecs[:, ::-1][:, :r]
 
-    mc = make_metrics_config(cfg, model, X, y, loss_fn, rng, U=U, target_agop=G_star,
+    mc = make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=X_val, y_val=y_val,
+                             U=U, target_agop=G_star,
                              target_eigvals=target_eigvals, target_eigvecs=target_eigvecs)
     state, traj, metrics = train(state, loss_fn, X, y,
                                  lr=lr, steps=get_in(cfg, "optim.steps"),
@@ -198,6 +204,7 @@ def log_run_to_wandb(out):
         hessian_max = float(m["hessian"]["max_eigvals"][t])
         row = {
             "loss": float(m["loss"][t]),
+            "val_loss": float(m["val"]["value"][t]),
 
             # Loss geometry. sharpness_ratio crosses 1.0 exactly at the edge of
             # stability, so it IS the EOS plot -- wandb cannot draw a reference

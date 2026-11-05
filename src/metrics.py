@@ -133,6 +133,12 @@ def neuron_cov_stats(state, model, X, num_power_iters, rng, dense_max=2048, **kw
 
     return result
 
+def val_loss(state, loss_fn, X_val, y_val, **kwargs):
+    """Loss on the held-out set. Evaluated at the same theta as every other
+    metric, so it is directly comparable to the training loss at that step."""
+    outputs = jax.vmap(lambda x: state.apply_fn(state.params, x))(X_val)
+    return {"value": loss_fn(outputs, y_val).mean()}
+
 def ntk_eigs(state, model, X, num_power_iters, rng, **kwargs):
     eigval, eigvec = mvp_power_iteration(
         lambda v: nvp(state.params, model, X, v),

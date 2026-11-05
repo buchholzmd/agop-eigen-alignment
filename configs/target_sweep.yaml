@@ -1,0 +1,38 @@
+extends: base.yaml
+name: target-sweep
+
+# Baseline, held fixed except for the swept axis. d=128, r=4 is the fixed-rank
+# multi-index regime: a 4-dim index subspace to recover inside 128 dims.
+data:   {n: 2048, d: 128, r: 4, noise: 0.001, normalize: none, seed: 33}
+model:  {depth: 2, parameterization: standard, width: 512}
+target: {basis: hermite, normalize: true, alpha: 0.0, terms: [{0: 1}, {0: 2}]}
+optim:  {lr_mode: relative}
+metrics: {num_power_iters: 30, every: 1}
+
+sweep:
+  # 2x2: degree (p = min|alpha|) x additive vs interacting.
+  target.terms:
+    - [{0: 1}, {0: 2}]          # p=1  low degree,  additive
+    - [{0: 1}, {0: 1, 1: 1}]    # p=1  low degree,  interacting (Abbe staircase)
+    - [{0: 4}]                  # p=4  high degree, additive
+    - [{0: 4}, {0: 2, 1: 2}]    # p=4  high degree, interacting
+  target.alpha: [0.0, 1.0]
+
+# lr is the measured axis, relative to eta_crit = 2/lambda_max(H) so the same
+# grid lands in the same regime at every width.
+lr_scan: {values: linspace, lo: 0.1, hi: 5.0, num: 51, stop_after_diverged: 2}
+
+limits:
+  max_params: 100000000
+  max_act_bytes: 4000000000
+  max_n_times_m: 1000000000
+  min_capacity: 0.5
+  max_capacity: 1000
+
+slurm:
+  account: def-YOURPI
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "6:00:00"
+  array: "0-7%8"
