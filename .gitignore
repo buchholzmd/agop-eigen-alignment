@@ -31,7 +31,7 @@ dist/
 .env.*
 
 # Outputs
-outputs/*
+output/*
 
 # Weights & Biases
 wandb/*
