@@ -14,12 +14,14 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jla
 
 from agop import nfm as _nfm
-from nn_utils import get_activations, nn_agop, sparsity, neuron_cov_mvp
+from functools import partial
+
+from nn_utils import get_activations, nn_agop, sparsity, _cov_mvp
 from ntk import nvp
 from hess import _hvp_flat
-from linalg import (align_bases, matrix_cosine, topk_eigs, mvp_power_iteration,
+from linalg import (align_bases, matrix_cosine, mvp_orthogonal_iteration, mvp_power_iteration,
                     intrinsic_dim, stable_rank, subspace_angles, wasserstein_1d,
-                    nuclear, row_space_cosines)
+                    nuclear)
 
 def agop(state, model, X, layers=(0,), **kwargs):
     return nn_agop(state.params, model, X,
@@ -31,12 +33,13 @@ def agop_eigs(state, model, X, k, rng, num_power_iters=None, **kwargs):
     dim = G.shape[0]
 
     if num_power_iters is not None:
-        eigvals, eigvecs = topk_eigs(lambda v: G @ v, dim, k, num_power_iters, rng)
+        eigvals, eigvecs = mvp_orthogonal_iteration(lambda v: G @ v, dim, k, num_power_iters, rng)
     else:
-        eigvals, eigvecs = jla.eigh(G)
-        eigvals, eigvecs = eigvals[::-1][:k], eigvecs[:, ::-1][:, :k]
+        spectrum, vecs = jla.eigh(G)
+        spectrum, vecs = spectrum[::-1], vecs[:, ::-1]
+        return {"eigvals": spectrum[:k], "eigvecs": vecs[:, :k], "spectrum": spectrum}
 
-    return {"eigvals": eigvals, "eigvecs": eigvecs}
+    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals}
 
 def nfm(state, **kwargs):
     return _nfm(state.params[0]['weights'])
@@ -46,12 +49,13 @@ def nfm_eigs(state, k, rng, num_power_iters=None, **kwargs):
     dim = W.shape[1]
 
     if num_power_iters is not None:
-        eigvals, eigvecs = topk_eigs(lambda v: W.T @ (W @ v), dim, k, num_power_iters, rng)
+        eigvals, eigvecs = mvp_orthogonal_iteration(lambda v: W.T @ (W @ v), dim, k, num_power_iters, rng)
     else:
         _, sv, Vh = jnp.linalg.svd(W, full_matrices=False)
-        eigvals, eigvecs = sv[:k] ** 2, Vh[:k].T
+        spectrum = sv ** 2
+        return {"eigvals": spectrum[:k], "eigvecs": Vh[:k].T, "spectrum": spectrum}
 
-    return {"eigvals": eigvals, "eigvecs": eigvecs}
+    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals}
 
 def nfa_cosine(state, **kwargs):
     M = kwargs["nfm"]
@@ -68,44 +72,63 @@ def neuron_sparsity(state, model=None, X=None, activations=None, **kwargs):
         activations = get_activations(state, model, X)
     return sparsity(activations)
 
-def neuron_cov_eigs(state, model, X, num_power_iters, rng, **kwargs):
-    acts = kwargs.get("activations", get_activations(state, model, X))
-    mvps = neuron_cov_mvp(acts)
+def rank_stats(X, num_power_iters=None, rng=None, dense_max=2048):
+    """Spectral rank statistics of a PSD matrix, from whichever form you hold.
 
-    result = {}
-    for i, (A, mvp) in enumerate(zip(acts[1:], mvps)):
-        dim = A.shape[1]
+    X : (k,)   a spectrum already in hand, used directly; or
+        (n, m) a factor, whose Gram X^T X / n is the matrix of interest.
 
-        eigval, eigvec = mvp_power_iteration(mvp, dim, num_power_iters, rng)
-        result[f"layer{i+1}_max_eigvals"] = eigval
-        result[f"layer{i+1}_max_eigvecs"] = eigvec
+    For a factor this dispatches on shape. If min(n, m) <= dense_max the Gram is
+    formed and the spectrum read off exactly -- and since X^T X and X X^T share
+    their nonzero spectrum, the SMALLER side is formed, which is what makes
+    m >> n affordable. lam[0] is then the max eigenvalue, so no power iteration
+    runs. Above dense_max the matrix cannot be formed and the traces are
+    Hutchinson-estimated matrix-free instead.
 
-    return result
+    All three ranks equal the true rank on a flat spectrum, which is what makes
+    them ranks, and they are ordered stable_rank <= intrinsic_dim <=
+    participation_ratio because (lam/lam_max)^2 <= lam/lam_max termwise:
+
+        stable_rank          ||lam||_2^2 / ||lam||_inf^2   dominated by the top
+        intrinsic_dim        ||lam||_1   / ||lam||_inf     carries more tail weight
+        participation_ratio  ||lam||_1^2 / ||lam||_2^2     how many dominant
+                                                           dimensions are
+                                                           contributing to the
+                                                           spectrum
+    """
+    if X.ndim == 1:
+        lam = jnp.clip(X, 0.0)
+        max_eigval = lam.max() + 1e-30
+        intrinsic  = lam.sum() / max_eigval
+        stable     = (lam ** 2).sum() / max_eigval ** 2
+    else:
+        n, m = X.shape
+        if min(n, m) <= dense_max:
+            M = (X @ X.T) if m > n else (X.T @ X)
+            lam = jnp.linalg.eigvalsh(M / n)[::-1]
+            max_eigval = lam[0]
+            intrinsic  = lam.sum() / max_eigval
+            stable     = (lam ** 2).sum() / max_eigval ** 2
+        else:
+            mvp = partial(_cov_mvp, X)
+            max_eigval, _ = mvp_power_iteration(mvp, m, num_power_iters, rng)
+            intrinsic = intrinsic_dim(mvp, m, num_power_iters, rng, max_eigval=max_eigval)
+            stable    = stable_rank(mvp, m, num_power_iters, rng, max_eigval=max_eigval)
+
+    return {
+        "max_eigval":          max_eigval,
+        "stable_rank":         stable,
+        "intrinsic_dim":       intrinsic,
+        "participation_ratio": intrinsic ** 2 / (stable + 1e-30),
+    }
 
 def neuron_cov_stats(state, model, X, num_power_iters, rng, dense_max=2048, **kwargs):
     acts = kwargs.get("activations", get_activations(state, model, X))
-    neuron_cov = kwargs.get("neuron_cov", {})
-    mvps = neuron_cov_mvp(acts)
 
     result = {}
-    for i, (A, mvp) in enumerate(zip(acts[1:], mvps)):
-        dim = A.shape[1]
-        n, m = A.shape
-        if min(n, m) <= dense_max:
-            # A^T A and A A^T share their nonzero spectrum: form the smaller one and
-            # read the stats off exactly, instead of Hutchinson-estimating the traces.
-            M = (A @ A.T) if m > n else (A.T @ A)
-            lam = jnp.linalg.eigvalsh(M / n)[::-1]
-            result[f"layer{i+1}_intrinsic_dim"] = lam.sum() / lam[0]
-            result[f"layer{i+1}_stable_rank"] = (lam ** 2).sum() / lam[0] ** 2
-            continue
-        max_eigval = neuron_cov.get(f"layer{i+1}_max_eigvals", None)
-        result[f"layer{i+1}_intrinsic_dim"] = intrinsic_dim(
-            mvp, dim, num_power_iters, rng, max_eigval=max_eigval
-        )
-        result[f"layer{i+1}_stable_rank"]   = stable_rank(
-            mvp, dim, num_power_iters, rng, max_eigval=max_eigval
-        )
+    for i, A in enumerate(acts[1:]):
+        for name, value in rank_stats(A, num_power_iters, rng, dense_max).items():
+            result[f"layer{i+1}_{name}"] = value
 
     return result
 
@@ -136,8 +159,10 @@ def hessian_eigs(state, loss_fn, X, y, num_power_iters, rng, **kwargs):
         )
     return {"max_eigvals": eigval, "max_eigvecs": eigvec}
 
-def target_alignment(state, target_agop, target_eigvals, target_eigvecs, U, **kwargs):
+def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_dirs, **kwargs):
     """Learned AGOP and NFM referenced to the target AGOP, which does not move.
+
+    target_dirs : (d, r) the target directions as COLUMNS, i.e. U.T.
 
     target_agop / target_eigvals / target_eigvecs are computed once per run in
     run_one, not per step: the target is fixed, so re-decomposing it every step
@@ -152,9 +177,11 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, U, **kw
     nfm_eigvals  = kwargs["nfm_eigs"]["eigvals"]
 
     alignment      = align_bases(agop_eigvecs, target_eigvecs)
-    rayleigh       = jnp.einsum("jd,de,je->j", U, learned_agop, U)
+    rayleigh       = jnp.einsum("dj,de,ej->j", target_dirs, learned_agop, target_dirs)
     agop_nuclear   = nuclear(learned_agop)
     target_nuclear = nuclear(target_agop)
+    agop_rank      = rank_stats(kwargs["agop_eigs"]["spectrum"])
+    target_rank    = rank_stats(target_eigvals)
 
     return {
         "agop_cosine":    matrix_cosine(learned_agop, target_agop),
@@ -169,25 +196,24 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, U, **kw
         "w1_nfm_agop":    wasserstein_1d(nfm_eigvals, agop_eigvals),
         "rayleigh":       rayleigh,
         "rayleigh_ratio": rayleigh / (target_eigvals + 1e-12),
+        **{f"agop_{name}": value for name, value in agop_rank.items()},
+        **{f"{name}_ratio": value / (target_rank[name] + 1e-12)
+           for name, value in agop_rank.items()},
     }
 
-def subspace_recovery(state, U, **kwargs):
+def subspace_recovery(state, target_dirs, **kwargs):
     """Principal angles to the target subspace, from the NFM and from the AGOP.
 
-    Both frames come straight out of nfm_eigs / agop_eigs, which must sit above
-    this entry in metrics_config.
+    target_dirs : (d, r) the target directions as COLUMNS, i.e. U.T.
+
+    Both frames come straight out of nfm_eigs / agop_eigs, which are already
+    column-orthonormal and must sit above this entry in metrics_config.
     """
     nfm_eigvecs  = kwargs["nfm_eigs"]["eigvecs"]
     agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
 
     result = {f"nfm_{name}":  value
-              for name, value in subspace_angles(nfm_eigvecs.T, U).items()}
+              for name, value in subspace_angles(nfm_eigvecs, target_dirs).items()}
     result.update({f"agop_{name}": value
-                   for name, value in subspace_angles(agop_eigvecs.T, U).items()})
+                   for name, value in subspace_angles(agop_eigvecs, target_dirs).items()})
     return result
-
-def row_space_recovery(state, **kwargs):
-    """NFM and AGOP against the projector onto row(W1). Needs "agop" above it."""
-    W = state.params[0]["weights"]
-    G = kwargs["agop"]["layer1_agop"]
-    return row_space_cosines(W, G)

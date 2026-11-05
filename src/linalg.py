@@ -24,7 +24,7 @@ def stiefel(m, n, rng, shape=()):
     else:
         return x
 
-def topk_eigs(matrix_fn, dim, k, num_iters, rng):
+def mvp_orthogonal_iteration(matrix_fn, dim, k, num_iters, rng):
     '''
     Compute the top-k eigenvalues and eigenvectors of a matrix using orthogonal iteration.
     '''
@@ -61,14 +61,6 @@ def hutchinson_trace_estimate(mvp, dim, num_iters, rng):
         v = jr.rademacher(rng.next(), (dim,))
         trace_estimate += v @ mvp(v)
     return trace_estimate / num_iters
-
-def nuclear(G):
-    """||G||_* for PSD G. Equals tr(G), since nuclear norm is sum|lambda_i|
-
-    Not jitted: one op, so the dispatch overhead exceeds the work. It inlines
-    into whatever jit calls it.
-    """
-    return jnp.trace(G)
 
 def intrinsic_dim(mvp, dim, num_iters, rng, max_eigval=None):
     trace = hutchinson_trace_estimate(
@@ -177,66 +169,34 @@ def wasserstein_1d(lam1, lam2):  # the actual W1
     return jnp.sum(jnp.abs(jnp.cumsum(p) - jnp.cumsum(q)))
 
 @jax.jit
-def subspace_angles(A, U):
-    """Principal angles between row(A) and row(U), both orthonormal frames.
+def subspace_angles(A, B):
+    """Principal angles between span(A) and span(B).
 
-    A : (k, d) orthonormal rows -- top-k eigenvectors of the NFM or AGOP, transposed
-    U : (r, d) orthonormal rows -- the target directions
+    A : (d, k) orthonormal COLUMNS spanning the first subspace
+    B : (d, r) orthonormal COLUMNS spanning the second
 
-    The caller passes a frame that has already been computed (nfm_eigs/agop_eigs),
-    so nothing is decomposed here. The top-k eigenvectors of W^T W ARE the top-k
-    right singular vectors of W, so an svd(W) would be redundant work.
+    Column convention for both arguments, align_bases uses the same convention
 
-    C = A U^T is the cosine matrix: its singular values are the cosines of the
-    principal angles, and Align(A, u_j) = ||A u_j||^2 is the j-th column sum of C^2.
+    C = A^T B is the cosine matrix: its singular values are the cosines of the
+    principal angles, and Align(A, b_j) = ||A^T b_j||^2 is the j-th column sum
+    of C^2.
 
-    sin_max is sqrt(1 - cos_min^2), NOT the top singular value of A U_perp^T: when
-    k > r that matrix has singular values equal to 1 for directions of row(A) lying
-    entirely outside row(U), which says nothing about the principal angles.
+    subspace_dist = ||sin(theta)||_F is the chordal metric on the Grassmannian.
+    ||A^T B_perp||_F = (1/sqrt2)||P_A - P_B||_F only when k <= r, so
+    it is computed from the sines directly.
     """
-    C = A @ U.T
-    alignment = (C ** 2).sum(axis=0) # Ben Arous metric
+    assert A.shape[0] == B.shape[0], "A and B must share the ambient dimension"
+
+    C = A.T @ B
+    alignment = (C ** 2).sum(axis=0)
 
     cosines = jnp.linalg.svd(C, compute_uv=False)
-    sines   = jnp.sqrt(jnp.clip(1.0 - cosines ** 2, 0.0)) # Zhu metric
+    sines   = jnp.sqrt(jnp.clip(1.0 - cosines ** 2, 0.0))
 
     return {
-        "alignment":        alignment,
-        "mean_alignment":   alignment.mean(),
-        "cos_max":          cosines[0],
-        "sin_max":          sines[0],
-        "subspace_dist":    jnp.sqrt(jnp.sum(sines ** 2)),
-    }
-
-
-@jax.jit
-def row_space_cosines(W, G):
-    """How close the NFM and the AGOP are to the projector onto row(W).
-
-    P_W is the orthogonal projector onto row(W). If W were semi-orthogonal then
-    W^T W would BE P_W, so cos(P_W, W^T W) measures how far W is from semi-
-    orthogonal -- structurally the same statement as the NFA, which measures how
-    far D is from identity in G = W^T D W.
-
-    Neither P_W nor (W W^T)^-1 is formed. P_W is d x d, and (W W^T)^-1 does not
-    exist once m > d: jnp.linalg.inv does not raise there, it returns garbage at
-    condition number ~1e18. Everything is read off the SVD of W instead, using
-
-        cos(P_W, W^T W) = sqrt(stable_rank(W^T W) / rank(W))
-
-    which is exact, and  tr(P_W G) = tr(Q G Q^T) with Q the right singular
-    vectors, which never leaves k x k.
-
-    nfm_cosine is 1 iff the nonzero singular values of W are all equal. Lower
-    means a spikier NFM spectrum, i.e. the network has concentrated its features.
-    """
-    _, sv, Vh = jnp.linalg.svd(W, full_matrices=False)   # Vh: (k, d), k = min(m, d)
-    k = Vh.shape[0]
-    lam = sv ** 2
-    stable_rank = lam.sum() ** 2 / ((lam ** 2).sum() + 1e-30)
-
-    return {
-        "nfm_cosine":  jnp.sqrt(stable_rank / k),
-        "agop_cosine": jnp.trace(Vh @ G @ Vh.T) / (jnp.sqrt(k) * jnp.linalg.norm(G) + 1e-30),
-        "stable_rank": stable_rank,
+        "alignment":      alignment,
+        "mean_alignment": alignment.mean(),
+        "cos_max":        cosines[0],
+        "sin_max":        sines[-1],
+        "subspace_dist":  jnp.linalg.norm(sines), # = r * (1 - mean_alignment) for k <= r
     }

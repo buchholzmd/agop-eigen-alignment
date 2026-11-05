@@ -87,20 +87,18 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng,
         "ntk":                 {"fn": metrics.ntk_eigs,          "args": (model, X, num_power_iters, rng)},
         "hessian":             {"fn": metrics.hessian_eigs,      "args": (loss_fn, X, y, num_power_iters, rng)},
         "sparsity":            {"fn": metrics.neuron_sparsity,   "args": (model, X)},
-        "neuron_cov":          {"fn": metrics.neuron_cov_eigs,   "args": (model, X, 10*num_power_iters, rng)},
-        "neuron_cov_int_dim":  {"fn": metrics.neuron_cov_stats,  "args": (model, X, 50*num_power_iters, rng)},
+        "neuron_cov":          {"fn": metrics.neuron_cov_stats,  "args": (model, X, 50*num_power_iters, rng)},
         "agop":                {"fn": metrics.agop,              "args": (model, X)},
         "nfm":                 {"fn": metrics.nfm},
         "agop_eigs":           {"fn": metrics.agop_eigs,         "args": (model, X, r, rng)},
         "nfm_eigs":            {"fn": metrics.nfm_eigs,          "args": (r, rng)},
-        "row_space":           {"fn": metrics.row_space_recovery},
         "nfa_correlation":     {"fn": metrics.nfa_cosine},
         "nfa_eigen_alignment": {"fn": metrics.nfa_alignment},
     }
     if U is not None:
         metrics_config["target"]   = {"fn": metrics.target_alignment,
-                                      "args": (target_agop, target_eigvals, target_eigvecs, U)}
-        metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U,)}
+                                      "args": (target_agop, target_eigvals, target_eigvecs, U.T)}
+        metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U.T,)}
     return metrics_config
 
 def run_one(cfg, log_wandb=None):
@@ -167,18 +165,16 @@ def log_run_to_wandb(out):
             "geometry/eos_gap":            hessian_max - 2.0 / lr,
 
             # Neuron statistics
-            "neuron/cov_max_eigval":  float(m["neuron_cov"]["layer1_max_eigvals"][t]),
-            "neuron/intrinsic_dim":   float(m["neuron_cov_int_dim"]["layer1_intrinsic_dim"][t]),
-            "neuron/stable_rank":     float(m["neuron_cov_int_dim"]["layer1_stable_rank"][t]),
+            "neuron/cov_max_eigval":  float(m["neuron_cov"]["layer1_max_eigval"][t]),
+            "neuron/intrinsic_dim":   float(m["neuron_cov"]["layer1_intrinsic_dim"][t]),
+            "neuron/stable_rank":     float(m["neuron_cov"]["layer1_stable_rank"][t]),
+            "neuron/participation_ratio": float(m["neuron_cov"]["layer1_participation_ratio"][t]),
             "neuron/sparsity_layer1": float(m["sparsity"]["value"][t][0].mean()),
             "neuron/frac_dead":       float((m["sparsity"]["value"][t][0] == 1.0).mean()),
 
             # NFM, against the AGOP (the literal Neural Feature Ansatz)
             "nfm/cosine_to_agop": float(m["nfa_correlation"]["matrix_correlation"][t]),
             "nfm/mean_alignment": float(matched[t].mean()),
-            "nfm/projector_cosine":  float(m["row_space"]["nfm_cosine"][t]),
-            "nfm/stable_rank":       float(m["row_space"]["stable_rank"][t]),
-            "nfm/agop_projector_cosine": float(m["row_space"]["agop_cosine"][t]),
 
             # Spectrum, against the target AGOP
             "spectrum/agop_cosine":    float(m["target"]["agop_cosine"][t]),
@@ -188,17 +184,21 @@ def log_run_to_wandb(out):
             "spectrum/nuclear_ratio":  float(m["target"]["nuclear_ratio"][t]),
             "spectrum/w1_agop_target": float(m["target"]["w1_agop_target"][t]),
             "spectrum/w1_nfm_agop":    float(m["target"]["w1_nfm_agop"][t]),
+            "spectrum/agop_stable_rank":         float(m["target"]["agop_stable_rank"][t]),
+            "spectrum/agop_intrinsic_dim":       float(m["target"]["agop_intrinsic_dim"][t]),
+            "spectrum/agop_participation_ratio": float(m["target"]["agop_participation_ratio"][t]),
+            "spectrum/stable_rank_ratio":         float(m["target"]["stable_rank_ratio"][t]),
+            "spectrum/intrinsic_dim_ratio":       float(m["target"]["intrinsic_dim_ratio"][t]),
+            "spectrum/participation_ratio_ratio": float(m["target"]["participation_ratio_ratio"][t]),
 
             # Subspace recovery
             "subspace/nfm_mean_alignment":   float(m["subspace"]["nfm_mean_alignment"][t]),
             "subspace/nfm_cos_max":          float(m["subspace"]["nfm_cos_max"][t]),
-            "subspace/nfm_cos_min":          float(m["subspace"]["nfm_cos_min"][t]),
             "subspace/nfm_sin_max":          float(m["subspace"]["nfm_sin_max"][t]),
-            "subspace/nfm_projection_error": float(m["subspace"]["nfm_projection_error"][t]),
+            "subspace/nfm_subspace_dist":    float(m["subspace"]["nfm_subspace_dist"][t]),
             "subspace/agop_mean_alignment":  float(m["subspace"]["agop_mean_alignment"][t]),
-            "subspace/agop_cos_min":         float(m["subspace"]["agop_cos_min"][t]),
             "subspace/agop_sin_max":         float(m["subspace"]["agop_sin_max"][t]),
-            "subspace/agop_projection_error":float(m["subspace"]["agop_projection_error"][t]),
+            "subspace/agop_subspace_dist":   float(m["subspace"]["agop_subspace_dist"][t]),
         }
         # Per direction, keyed by the TRUE direction j so the series never moves.
         # The matched eigenvector index is logged as its own series instead.
