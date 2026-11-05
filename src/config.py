@@ -89,25 +89,49 @@ def flatten(cfg, prefix=""):
     return out
 
 
+# Infrastructure, not experiment. W&B filters runs on config values, so the
+# config should hold exactly what distinguishes one run from another -- not the
+# SLURM account, the cache path, or the sweep definition that generated it.
+INFRA_KEYS = ("slurm", "paths", "wandb", "limits", "lr_scan", "sweep",
+              "_sweep_axes", "_wandb_name")
+
+
+def run_config(cfg):
+    """Flat hyperparameter dict for wandb.init(config=...), infrastructure stripped."""
+    return flatten({k: v for k, v in cfg.items() if k not in INFRA_KEYS})
+
+
 def run_name(cfg):
-    """Readable, sortable run name built from whatever this sweep varies.
+    """{experiment}_{parameterization}_m={width}_lr={lr}
 
-    nfa_phase__parameterization=mup__lr=1.20__d=3__m=1000__seed=33
+        subspace-recovery_spectral_m=512_lr=1.8
 
-    Without this every run gets a random W&B slug and the dashboard is unusable.
+    The experiment prefix is `name:` from the YAML. Everything in the name is
+    also in the config and filterable there -- the name exists so a run is
+    identifiable at a glance in the run table and in overlay legends, not as a
+    search key. Under optim.lr_mode: relative the lr shown is the multiple of
+    eta_crit, which is the quantity the grid is defined in; the absolute value
+    is logged as config.lr_absolute.
     """
-    parts = [cfg.get("name", "run")]
-    for dotted, val in (cfg.get("_sweep_axes") or {}).items():
-        short = dotted.split(".")[-1]
-        parts.append(f"{short}={val:.2f}" if isinstance(val, float) else f"{short}={val}")
-    parts += [
-        f"d={get_in(cfg, 'data.d')}",
+    return "_".join([
+        cfg.get("name", "run"),
+        str(get_in(cfg, "model.parameterization")),
         f"m={get_in(cfg, 'model.width')}",
-        f"seed={get_in(cfg, 'data.seed')}",
-    ]
-    return "__".join(parts)
+        f"lr={get_in(cfg, 'optim.lr'):.5g}",
+    ])
 
 
 def group_name(cfg):
-    """All configs from one sweep file share this, so W&B groups them together."""
+    """All runs from one sweep file share this, so W&B groups them together."""
     return cfg.get("name", "run")
+
+
+def run_tags(cfg):
+    """Coarse facets. W&B tag filtering is first-class and cheaper than a config query."""
+    return [
+        get_in(cfg, "model.parameterization"),
+        f"m{get_in(cfg, 'model.width')}",
+        f"d{get_in(cfg, 'data.d')}",
+        f"r{get_in(cfg, 'data.r')}",
+        f"n{get_in(cfg, 'data.n')}",
+    ]

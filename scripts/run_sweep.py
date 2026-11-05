@@ -20,18 +20,8 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 import jax
 jax.config.update("jax_default_matmul_precision", "highest")
 
-from config import load_config, expand, flatten, get_in
+from config import load_config, expand, get_in, run_name
 from sweep_utils import expand_dr, lr_grid, feasible, is_diverged
-
-
-PARAM_ABBREV = {"standard": "sp", "ntk": "ntk", "mup": "mup", "spectral": "spec"}
-
-
-def descriptive_name(cfg, lr_index):
-    """Short W&B run title. Every hyperparameter is already in the logged config
-    and filterable there, so the name only has to identify the point."""
-    param = PARAM_ABBREV[get_in(cfg, "model.parameterization")]
-    return f"{param}-m{get_in(cfg,'model.width')}-lr{lr_index:02d}"
 
 
 def cell_id(cfg):
@@ -79,10 +69,10 @@ def main():
 
         print(f"[cell {ci+1}/{len(mine)}] {cid}", flush=True)
         consecutive, executed, t0 = 0, 0, time.time()
-        for lr_index, lr in enumerate(lrs):
+        for lr in lrs:
             one = json.loads(json.dumps(cfg))        # deep copy, no shared state
             one["optim"]["lr"] = float(lr)
-            one["_wandb_name"] = descriptive_name(cfg, lr_index)
+            one["_wandb_name"] = run_name(one)
             tag = one["_wandb_name"]
             rdir = cdir / f"lr={lr:.5g}"
             if (rdir / "done.json").exists():

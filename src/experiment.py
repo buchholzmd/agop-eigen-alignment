@@ -21,7 +21,7 @@ from poly import poly
 from multi_index import generate_multi_index_data
 from agop import agop
 import metrics
-from config import get_in, flatten, run_name, group_name
+from config import get_in, run_config, run_name, group_name, run_tags
 
 def build_data(cfg, rng):
     '''-> X, y, U, target_fn, G_star.  Sources: multi-index.ipynb cell 4.'''
@@ -136,15 +136,33 @@ def run_one(cfg, log_wandb=None):
 def log_run_to_wandb(out):
     import wandb
     cfg = out["cfg"]
-    cfgf = flatten(cfg)
-    cfgf.update(eta_crit=out["eta_crit"], lr_absolute=out["lr"],
-                ntk_lambda0=out["ntk_lambda0"], hess_lambda0=out["hess_lambda0"])
+    d, r = get_in(cfg, "data.d"), get_in(cfg, "data.r")
+    n, m = get_in(cfg, "data.n"), get_in(cfg, "model.width")
+
+    # The config is the search index. Alongside the raw settings, log the derived
+    # ratios the sweep is actually organized around, so they can be filtered and
+    # plotted against directly instead of being recomputed in the dashboard.
+    config = run_config(cfg)
+    config.update(
+        eta_crit     = out["eta_crit"],
+        lr_absolute  = out["lr"],
+        lr_relative  = out["lr"] / out["eta_crit"],
+        ntk_lambda0  = out["ntk_lambda0"],
+        hess_lambda0 = out["hess_lambda0"],
+        phi          = m / r,          # width per target direction
+        capacity     = n / d,          # samples per ambient dimension
+        n_over_r2    = n / r ** 2,     # samples against the target AGOP floor
+        n_params     = d * m + 2 * m + 1,
+    )
+
     run = wandb.init(entity=get_in(cfg, "wandb.entity"), project=get_in(cfg, "wandb.project"),
-                     name=cfg.get("_wandb_name") or run_name(cfg), group=group_name(cfg), config=cfgf,
+                     name=cfg.get("_wandb_name") or run_name(cfg),
+                     group=group_name(cfg),
+                     job_type=get_in(cfg, "model.parameterization"),
+                     tags=run_tags(cfg),
+                     config=config,
                      mode=get_in(cfg, "wandb.mode"),
-                     tags=get_in(cfg, "wandb.tags") or None,
                      notes=get_in(cfg, "wandb.notes") or None,
-                     job_type=get_in(cfg, "wandb.job_type"),
                      reinit=True)
     m, r = out["metrics"], out["r"]
     lr = out["lr"]
