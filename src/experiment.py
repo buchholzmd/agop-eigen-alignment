@@ -6,6 +6,7 @@ import os
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import jax.random as jr
 
 from jax.flatten_util import ravel_pytree
@@ -28,18 +29,43 @@ def build_data(cfg, rng):
     n, d, r = get_in(cfg, "data.n"), get_in(cfg, "data.d"), get_in(cfg, "data.r")
     X = jr.normal(rng.next(), (n, d))
 
-    coeffs = jnp.asarray(get_in(cfg, "target.coeffs"), dtype=jnp.float32)
-    orders = jnp.asarray(get_in(cfg, "target.orders"), dtype=jnp.int32)
-    # Span all r latent directions: cycle the exponent pattern, and continue the
-    # coefficient list's own power law k^-s past its length.  Without this the target
-    # silently ignores coordinates len(orders)..r-1, so every swept r trains an r=3
-    # target.  Renormalizing to ||c||_2 = 1 makes E[f*^2] = 1 analytically at every r.
-    if r > coeffs.shape[0]:
-        s = -jnp.log(coeffs[1] / coeffs[0]) / jnp.log(2.0)
-        coeffs = coeffs[0] * jnp.arange(1, r + 1, dtype=coeffs.dtype) ** -s
-    coeffs = coeffs[:r] / jnp.linalg.norm(coeffs[:r])
-    orders = orders[jnp.arange(r) % orders.shape[0]]
-    alpha  = jnp.diag(orders)                      # 1-D orders == one term per coordinate
+    # Coefficients are built from target.alpha, not listed: c_k ~ k^-alpha over all
+    # r directions, then normalized so ||c||_2 = 1 and E[f*^2] = 1 exactly at every r.
+    # alpha = 0 IS the constant-coefficient target, so one parameter covers both
+    # families and alpha is sweepable. Orders are a pattern, cycled to r.
+    alpha_decay = float(get_in(cfg, "target.alpha"))
+    coeffs = jnp.arange(1, r + 1, dtype=jnp.float32) ** -alpha_decay
+    coeffs = coeffs / jnp.linalg.norm(coeffs)
+
+    # target.terms builds the multi-index set Lambda = {alpha^(m)} that poly takes.
+    # A term maps a RELATIVE direction offset to a Hermite degree. Two forms:
+    #
+    #   flat   [{0: 2}]                  broadcast: EVERY direction k gets h_2(z_k)
+    #          [{0: 1}, {0: 2}]          Ben Arous, h_1(z_k) + h_2(z_k) for every k
+    #          [{0: 2}, {0: 1, 1: 1}]    h_2(z_k) + h_1(z_k) h_1(z_{k+1}), interacting
+    #
+    #   nested [[{0: 4}], [{0: 3}], [{0: 2}]]
+    #                                    cycled: direction k gets group k mod n_groups,
+    #                                    i.e. Lambda = {4e_1, 3e_2, 2e_3, 4e_4, ...}
+    #
+    # Both are r-independent, so an r sweep regenerates Lambda consistently.
+    # Each term carries 1/sqrt(terms in its group) so every direction's link has
+    # unit L2 norm and ||c||_2 = 1 still gives E[f*^2] = 1.
+    terms = get_in(cfg, "target.terms")
+    groups = terms if isinstance(terms[0], list) else [terms]
+
+    rows, weights = [], []
+    for k in range(r):
+        group = groups[k % len(groups)]
+        for term in group:
+            row = np.zeros(r, dtype=np.int32)
+            for offset, degree in term.items():
+                row[(k + int(offset)) % r] = int(degree)
+            rows.append(row)
+            weights.append(coeffs[k] / np.sqrt(len(group)))
+    alpha  = jnp.asarray(np.stack(rows), dtype=jnp.int32)
+    coeffs = jnp.asarray(np.asarray(weights, dtype=np.float32))
+
     g = lambda z: poly(alpha, coeffs, z,
                        basis=get_in(cfg, "target.basis"),
                        normalize=get_in(cfg, "target.normalize"))
@@ -228,6 +254,7 @@ def log_run_to_wandb(out):
             row[f"spectrum/rayleigh_ratio{j}"]= float(m["target"]["rayleigh_ratio"][t][j])
         wandb.log(row, step=t)
 
+    run.summary.update(metrics.run_summary(m, lr))
     log_directional_slices(out)
     run.finish()
     return run

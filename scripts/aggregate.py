@@ -22,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 
 from config import load_config, get_in
+from metrics import fit_power_law, classify_regime
 
 # (metric key, axis label, log scale)
 PANELS = [
@@ -55,29 +56,14 @@ def load_runs(entity, project, group, cache_dir):
             history = pd.DataFrame(list(run.scan_history()))
             if len(history):
                 history.to_parquet(cache)
-        runs.append((dict(run.config), history, run.name))
+        runs.append((dict(run.config), history, run.name, dict(run.summary)))
     return runs
-
-
-def classify_regime(loss, blowup=100.0, tol=1e-9):
-    """monotonic | catapult | diverged.
-
-    A catapult needs both a rise AND a recovery below the pre-rise loss. Without
-    the recovery condition every diverging run looks like a catapult.
-    """
-    loss = np.asarray(loss, dtype=float)
-    if not np.all(np.isfinite(loss)) or loss[-1] > blowup * np.nanmin(loss):
-        return "diverged"
-    rises = np.where(np.diff(loss) > tol * np.maximum(1.0, np.abs(loss[:-1])))[0]
-    if len(rises) and loss[-1] < loss[rises[0]]:
-        return "catapult"
-    return "monotonic"
 
 
 def group_by_cell(runs):
     """-> {(parameterization, width): [(lr, config, history, name), ...]} sorted by lr."""
     cells = {}
-    for config, history, name in runs:
+    for config, history, name, summary in runs:
         key = (config.get("model.parameterization"), config.get("model.width"))
         cells.setdefault(key, []).append(
             (config.get("lr_absolute"), config, history, name))
@@ -173,6 +159,91 @@ def main():
         regimes = make_regime_plot(key, cell, outdir)
         print(f"{key}  {len(cell)} runs  ->  {video.name}, {regimes.name}", flush=True)
 
+    rows, figures = scaling_exponents(runs, outdir)
+    print(f"\nfitted {len(rows)} scaling exponents:")
+    for x, y, param, beta, r2, lo, hi, n in rows:
+        print(f"   {y:26s} vs {x:12s} {param:9s}  beta={beta:+.4f}  r2={r2:.4f}  "
+              f"range [{lo:g}, {hi:g}]  ({n} pts)", flush=True)
+    if get_in(cfg, "wandb.enabled"):
+        upload_aggregate(cfg, rows, figures, outdir)
+
 
 if __name__ == "__main__":
     main()
+
+
+# (x config key, y summary key, reduction over the lr grid, axis label)
+SCALING_FITS = [
+    ("model.width", "loss_min",                 "min", "best loss"),
+    ("model.width", "final_nfm_subspace_dist",  "min", "best subspace distance"),
+    ("model.width", "final_nuclear_ratio",      "max", "AGOP nuclear / target"),
+]
+
+
+def scaling_exponents(runs, outdir):
+    """Fit y ~ x^beta per parameterization, after reducing over the lr grid.
+
+    The paper identifies the fitting range by visual inspection; fit_power_law
+    scans for the longest range that is actually linear and reports it, so the
+    exponent is reproducible and the claim is checkable.
+
+    Reducing over lr first is what makes this the compute-optimal frontier: at
+    each width the best run over the learning-rate grid is the one the scaling
+    law is about, not an arbitrary lr.
+    """
+    rows, figures = [], {}
+
+    for x_key, y_key, how, label in SCALING_FITS:
+        by_param = {}
+        for config, history, name, summary in runs:
+            if y_key not in summary or summary.get("regime") == "diverged":
+                continue
+            param = config.get("model.parameterization")
+            x = config.get(x_key)
+            if x is None:
+                continue
+            by_param.setdefault(param, {}).setdefault(x, []).append(float(summary[y_key]))
+
+        fig, ax = plt.subplots(figsize=(5.5, 4.2))
+        for param, per_x in sorted(by_param.items()):
+            xs = np.array(sorted(per_x))
+            ys = np.array([(min if how == "min" else max)(per_x[x]) for x in xs])
+            fit = fit_power_law(xs, ys, min_points=3, r2_min=0.90)
+            rows.append([x_key, y_key, param, fit["exponent"], fit["r2"],
+                         fit["x_lo"], fit["x_hi"], fit["n_points"]])
+
+            line, = ax.plot(xs, ys, "o-", label=f"{param}  b={fit['exponent']:+.3f}")
+            if np.isfinite(fit["exponent"]):
+                xf = np.array([fit["x_lo"], fit["x_hi"]])
+                ax.plot(xf, np.exp(fit["intercept"]) * xf ** fit["exponent"],
+                        "--", color=line.get_color(), alpha=0.7)
+        ax.set(xscale="log", yscale="log", xlabel=x_key, ylabel=label,
+               title=f"{label} vs {x_key}")
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        path = pathlib.Path(outdir) / f"scaling_{y_key}_vs_{x_key.replace('.','_')}.png"
+        fig.savefig(path, dpi=140)
+        figures[f"scaling/{y_key}_vs_{x_key}"] = str(path)
+        plt.close(fig)
+
+    return rows, figures
+
+
+def upload_aggregate(cfg, rows, figures, outdir):
+    """One W&B run holding the fitted exponents: a table, the plots, and summary
+    scalars. Exponents are run-level numbers, so they belong in summary, not in
+    a logged time series."""
+    import wandb
+    run = wandb.init(entity=get_in(cfg, "wandb.entity"), project=get_in(cfg, "wandb.project"),
+                     name=f"{cfg.get('name')}_scaling", group=cfg.get("name"),
+                     job_type="aggregate", mode=get_in(cfg, "wandb.mode"), reinit=True)
+    table = wandb.Table(columns=["x", "y", "parameterization", "exponent", "r2",
+                                 "x_lo", "x_hi", "n_points"], data=rows)
+    run.log({"scaling/exponents": table,
+             **{k: wandb.Image(v) for k, v in figures.items()}})
+    run.summary.update({f"beta__{y}__{param}": exponent
+                        for _, y, param, exponent, *_ in rows})
+    run.finish()
+    return run
+
+

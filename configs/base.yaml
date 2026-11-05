@@ -19,12 +19,23 @@ target:
   #   E[f*^2]  = sum_k c_k^2           (no d or r factor: z = Ux ~ N(0, I_r) exactly)
   #   G*       = U^T diag(c_k^2 p_k) U (exact, diagonal -- so the alignment ceiling is 1)
   # Unit 2-norm => RMS = 1 at every r, which keeps loss, SNR and eta_crit comparable
-  # across the sweep.  c_k ~ k^-0.5; build_data continues that law when data.r > 3.
-  coeffs: [0.738549, 0.522233, 0.426401]
-  # Information exponents, cycled to r.  NOT [3,2,1]: two directions with p=1 both
-  # carry a constant gradient term, which puts an off-diagonal block in G* and makes
-  # them individually unrecoverable (ceiling 0.889 at r=6).  [4,3,2] has none at any r.
-  orders: [4, 3, 2]
+  # across the sweep.
+  #
+  # c_k ~ k^-alpha, built for whatever data.r is. alpha = 0 gives constant
+  # coefficients, so this one knob covers both target families and is sweepable.
+  # Ben Arous et al. (arXiv:2508.03688) split at alpha = 1/2: below it the student
+  # width matters only through phi = m/r, above it only in absolute terms. Do NOT
+  # use alpha = 0.5 -- both of their scaling laws degenerate exactly there.
+  alpha: 1.0
+  # Multi-index structure, as patterns broadcast over the r directions. A term
+  # maps a RELATIVE direction offset to a Hermite degree, so it is r-independent.
+  #   [{0: 2}]                 h_2(z_k)                          -- single quadratic link
+  #   [{0: 1}, {0: 2}]         h_1(z_k) + h_2(z_k)               -- Ben Arous (He_1+He_2)
+  #   [{0: 2}, {0: 1, 1: 1}]   h_2(z_k) + h_1(z_k) h_1(z_{k+1})  -- interacting
+  # A degree-1 term gives every direction information exponent 1, which puts an
+  # off-diagonal c_j c_k block in G*: directions stop being individually
+  # identifiable, but span(U) does not, so subspace metrics are unaffected.
+  terms: [{0: 2}]
 
 model:
   width: 1000

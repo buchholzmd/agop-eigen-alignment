@@ -6,6 +6,7 @@ __Contents__:
 - [Introduction](#introduction)
 - [Dependencies](#dependencies)
 - [Running on Fir](#running-on-fir)
+- [Specifying the target](#specifying-the-target)
 - [Repository structure](#repository-structure)
 - [Running experiments](#running-experiments)
 - [Contact & attribution](#contact--attribution)
@@ -123,6 +124,78 @@ scancel <jobid>                                                # cancel the whol
 ```
 
 Each task logs to `output/slurm/agop-sweep-<jobid>_<task>.out`. To finish tasks that hit the time limit, run the same `submit.sh` command again: completed cells and learning rates are skipped. Resubmit the whole array rather than single task IDs, because the chunk count comes from the array size.
+
+## Specifying the target
+
+The target is a multi-index model $f^*(x) = g(Ux)$ with $U \in \mathbb{R}^{r \times d}$ orthonormal
+rows, and $g$ a general multivariate polynomial in the orthonormal Hermite basis
+$h_k = He_k/\sqrt{k!}$:
+
+$$g(z) \;=\; \sum_{m} c_m \prod_{j=1}^{r} h_{\alpha^{(m)}_j}(z_j), \qquad \alpha^{(m)} \in \mathbb{N}_0^{\,r}$$
+
+`src/poly.py` evaluates this for any multi-index set $\Lambda = \{\alpha^{(m)}\}$. The config does
+not list $\Lambda$ directly, because `data.r` is a sweep axis and a literal matrix has a fixed
+number of columns; instead `target.terms` gives a **rule** that regenerates $\Lambda$ for whatever
+`r` is. The rule is applied in `build_data` ([src/experiment.py](src/experiment.py), the
+`target.terms` block), which emits the `(alpha, coeffs)` pair `poly` consumes.
+
+### Grammar
+
+A **term** maps a *relative* direction offset to a Hermite degree. Three constructs:
+
+| construct | meaning |
+|---|---|
+| `{0: 3, 1: 2}` | one term, a **product**: $h_3(z_k)\,h_2(z_{k+1})$ |
+| `{0: 3}, {0: 2}` as siblings | two terms, a **sum**: $h_3(z_k) + h_2(z_k)$ |
+| flat list `[A, B]` | **broadcast**: every direction gets $A + B$ |
+| nested list `[[A], [B]]` | **cycle**: direction $k$ gets group $k \bmod n_{\text{groups}}$ |
+
+Offsets wrap, so a term with a nonzero offset couples direction $r-1$ back to $0$.
+Coefficients are $c_k \propto k^{-\texttt{target.alpha}}$ normalized to $\|c\|_2 = 1$, with each
+group additionally divided by $\sqrt{|\text{group}|}$, so $\mathbb{E}[f^{*2}] = 1$ exactly at every
+`r`. `target.alpha = 0` gives constant coefficients.
+
+### Examples (shown at $r = 4$)
+
+**`terms: [{0: 2}]`** — one quadratic link per direction, the canonical single-index-per-direction
+target (Ben Arous et al. [arXiv:2508.03688](https://arxiv.org/abs/2508.03688) use exactly this
+shape with $\sigma = He_2$):
+
+$$g(z) = c_0 h_2(z_0) + c_1 h_2(z_1) + c_2 h_2(z_2) + c_3 h_2(z_3)$$
+
+**`terms: [[{0: 4}], [{0: 3}], [{0: 2}]]`** — nested, so degrees **differ by direction**, cycling
+with period 3:
+
+$$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1) + c_2 h_2(z_2) + c_3 h_4(z_3)
+\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&0&0\\0&0&2&0\\0&0&0&4\end{pmatrix}$$
+
+**`terms: [[{0: 4}], [{0: 3}, {0: 2}]]`** — nested groups, and group 1 holds **two siblings**, so
+odd directions get a *sum* of two degrees on the same coordinate:
+
+$$g(z) = c_0 h_4(z_0) + \tfrac{c_1}{\sqrt2}\big[h_3(z_1) + h_2(z_1)\big]
+       + c_2 h_4(z_2) + \tfrac{c_3}{\sqrt2}\big[h_3(z_3) + h_2(z_3)\big]$$
+
+**`terms: [[{0: 4}], [{0: 3, 1: 2}]]`** — group 1 is a **single term with two offsets**, so it is a
+*product* across two directions. Note the wraparound in the last row:
+
+$$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_0)
+\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&2&0\\0&0&4&0\\2&0&0&3\end{pmatrix}$$
+
+### Choosing a target
+
+The information exponent $p = \min\{|\alpha| : c_\alpha \neq 0\}$ sets the sample complexity,
+roughly $n \gtrsim d^{|\alpha|_{\max}/2}/c_{\min}^2$ in the CSQ sense. At $d=128$, $r=4$,
+$\alpha_{\text{decay}}=1$:
+
+| terms | $\max\lvert\alpha\rvert$ | $n$ required |
+|---|---|---|
+| `[{0: 2}]` | 2 | 2,916 |
+| `[{0: 1}, {0: 2}]` | 2 | 2,916 |
+| `[{0: 1}, {0: 1, 1: 1}]` | 2 | 2,916 |
+| `[[{0: 4}], [{0: 3, 1: 2}]]` | 5 | **4,222,175** |
+
+A single degree-5 interaction raises the requirement by three orders of magnitude, so matched
+total degree is what makes two targets comparable.
 
 ## Repository structure
 

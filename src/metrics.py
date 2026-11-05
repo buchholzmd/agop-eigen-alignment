@@ -11,6 +11,7 @@ ABOVE it in metrics_config.
 """
 import jax
 import jax.numpy as jnp
+import numpy as np
 import jax.scipy.linalg as jla
 
 from agop import nfm as _nfm
@@ -217,3 +218,111 @@ def subspace_recovery(state, target_dirs, **kwargs):
     result.update({f"agop_{name}": value
                    for name, value in subspace_angles(agop_eigvecs, target_dirs).items()})
     return result
+
+
+def fit_power_law(x, y, min_points=5, r2_min=0.98):
+    """Least-squares fit of y ~ C x^beta in log-log, over the longest linear range.
+
+    Ben Arous et al. identify the fitting range "by visual inspection". This does
+    it by scan instead: every contiguous window of at least min_points is fit,
+    and the LONGEST window clearing r2_min wins, ties broken by R^2. The exponent
+    is then reproducible rather than eyeballed, and the range it was fit over is
+    reported alongside it so the claim can be checked.
+
+    Window fits use prefix sums, so the scan is O(n^2) rather than O(n^3).
+
+    Returns exponent = nan when no window clears r2_min -- that is a real answer
+    (no power law here), not a failure.
+    """
+    x = np.asarray(x, dtype=float).ravel()
+    y = np.asarray(y, dtype=float).ravel()
+    keep = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+    lx, ly = np.log(x[keep]), np.log(y[keep])
+    order = np.argsort(lx)
+    lx, ly = lx[order], ly[order]
+    n = lx.size
+    nan = {"exponent": np.nan, "intercept": np.nan, "r2": np.nan,
+           "x_lo": np.nan, "x_hi": np.nan, "n_points": 0}
+    if n < min_points:
+        return nan
+
+    z  = lambda a: np.concatenate([[0.0], np.cumsum(a)])
+    cx, cy, cxx, cyy, cxy = z(lx), z(ly), z(lx*lx), z(ly*ly), z(lx*ly)
+
+    best = None
+    for i in range(n - min_points + 1):
+        js = np.arange(i + min_points, n + 1)
+        k  = (js - i).astype(float)
+        sx, sy   = cx[js]-cx[i], cy[js]-cy[i]
+        sxx, syy = cxx[js]-cxx[i], cyy[js]-cyy[i]
+        sxy      = cxy[js]-cxy[i]
+        varx = sxx - sx*sx/k
+        vary = syy - sy*sy/k
+        cov  = sxy - sx*sy/k
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2 = np.where((varx > 0) & (vary > 0), cov*cov/(varx*vary), 0.0)
+        ok = np.flatnonzero(r2 >= r2_min)
+        if ok.size == 0:
+            continue
+        pick = ok[np.lexsort((r2[ok], k[ok]))[-1]]
+        key = (k[pick], r2[pick])
+        if best is None or key > best[0]:
+            beta = cov[pick] / varx[pick]
+            best = (key, beta, (sy[pick] - beta*sx[pick])/k[pick], r2[pick], i, js[pick])
+
+    if best is None:
+        return nan
+    _, beta, c, r2, i, j = best
+    return {"exponent": float(beta), "intercept": float(c), "r2": float(r2),
+            "x_lo": float(np.exp(lx[i])), "x_hi": float(np.exp(lx[j-1])),
+            "n_points": int(j - i)}
+
+
+def classify_regime(loss, blowup=100.0, tol=1e-9):
+    """monotonic | catapult | diverged.
+
+    A catapult needs both a rise AND a recovery below the pre-rise loss. Without
+    the recovery condition every diverging run also looks like a catapult.
+    """
+    loss = np.asarray(loss, dtype=float).ravel()
+    if not np.all(np.isfinite(loss)) or loss[-1] > blowup * np.nanmin(loss):
+        return "diverged"
+    rises = np.where(np.diff(loss) > tol * np.maximum(1.0, np.abs(loss[:-1])))[0]
+    if len(rises) and loss[-1] < loss[rises[0]]:
+        return "catapult"
+    return "monotonic"
+
+
+def run_summary(metrics, lr):
+    """Run-level scalars for wandb.summary -- one number per run, not a series.
+
+    These become sortable columns in the W&B run table and usable axes in
+    scatter plots, which is where a fitted exponent or an edge-of-stability
+    crossing belongs. wandb.log() would make them degenerate time series.
+    """
+    loss = np.asarray([float(v) for v in metrics["loss"]])
+    sharp = np.asarray([float(v) for v in metrics["hessian"]["max_eigvals"]]) * lr / 2.0
+
+    crossed = np.flatnonzero(sharp >= 1.0)
+    fit = fit_power_law(np.arange(1, loss.size + 1), loss)
+
+    out = {
+        "regime":              classify_regime(loss),
+        "loss_final":          float(loss[-1]),
+        "loss_min":            float(np.nanmin(loss)),
+        "loss_exponent":       fit["exponent"],      # loss ~ step^beta
+        "loss_exponent_r2":    fit["r2"],
+        "loss_fit_lo":         fit["x_lo"],
+        "loss_fit_hi":         fit["x_hi"],
+        "sharpness_ratio_max": float(np.nanmax(sharp)),
+        "eos_first_step":      int(crossed[0]) if crossed.size else -1,
+        "eos_fraction":        float((sharp >= 1.0).mean()),
+    }
+    for group, keys in (("subspace", ("nfm_mean_alignment", "nfm_subspace_dist",
+                                      "agop_mean_alignment", "agop_subspace_dist")),
+                        ("target",   ("agop_cosine", "eigvec_score", "nuclear_ratio",
+                                      "intrinsic_dim_ratio", "stable_rank_ratio"))):
+        for key in keys:
+            if key in metrics.get(group, {}):
+                out[f"final_{key}"] = float(jnp.stack(metrics[group][key])[-1])
+    return out
