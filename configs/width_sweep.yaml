@@ -25,7 +25,6 @@ limits:
   max_capacity: 1000
 
 slurm:
-  account: def-YOURPI
   gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
   cpus_per_task: 3
   mem: 70G
