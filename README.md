@@ -7,6 +7,7 @@ __Contents__:
 - [Dependencies](#dependencies)
 - [Running on Fir](#running-on-fir)
 - [Specifying the target](#specifying-the-target)
+- [W&B metrics](#wb-metrics)
 - [Repository structure](#repository-structure)
 - [Running experiments](#running-experiments)
 - [Contact & attribution](#contact--attribution)
@@ -183,19 +184,69 @@ $$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_
 
 ### Choosing a target
 
-The information exponent $p = \min\{|\alpha| : c_\alpha \neq 0\}$ sets the sample complexity,
-roughly $n \gtrsim d^{|\alpha|_{\max}/2}/c_{\min}^2$ in the CSQ sense. At $d=128$, $r=4$,
-$\alpha_{\text{decay}}=1$:
+Subspace recovery is governed by the information exponent $p=\min\{|\alpha|:c_\alpha\neq0\}$ --
+the *lowest* degree present, not the highest. At $d=128$, $r=4$, `alpha: 1`:
 
-| terms | $\max\lvert\alpha\rvert$ | $n$ required |
-|---|---|---|
-| `[{0: 2}]` | 2 | 2,916 |
-| `[{0: 1}, {0: 2}]` | 2 | 2,916 |
-| `[{0: 1}, {0: 1, 1: 1}]` | 2 | 2,916 |
-| `[[{0: 4}], [{0: 3, 1: 2}]]` | 5 | **4,222,175** |
+| terms | $p$ | $\max\lvert\alpha\rvert$ | $n \gtrsim d^{p/2}/c_{\min}^2$ |
+|---|---|---|---|
+| `[{0: 1}, {0: 2}]` | 1 | 2 | 258 |
+| `[{0: 1}, {0: 1, 1: 1}]` | 1 | 2 | 258 |
+| `[{0: 2}]` | 2 | 2 | 2,916 |
+| `[{0: 2}, {0: 4}]` | 2 | 4 | 2,916 |
+| `[{0: 4}]` | 4 | 4 | 373,191 |
 
-A single degree-5 interaction raises the requirement by three orders of magnitude, so matched
-total degree is what makes two targets comparable.
+Adding a high-degree term alongside a low-degree one does not raise $p$: `[{0: 2}, {0: 4}]`
+costs the same as `[{0: 2}]`, because the degree-2 part already exposes every direction. Only
+the degree-4 term *alone* raises the exponent.
+
+> **Rough guide only.** $d^{p/2}$ is a CSQ *lower* bound (Damian et al.
+> [arXiv:2305.10633](https://arxiv.org/abs/2305.10633)) for correlational queries, not a
+> guarantee for full-batch GD on a ReLU network. One-pass SGD's upper bound is $d^{p-1}$
+> (Ben Arous et al. [arXiv:2003.10409](https://arxiv.org/abs/2003.10409)) and data reuse can
+> reach $d\,\mathrm{polylog}\,d$ (Lee et al. [arXiv:2406.01581](https://arxiv.org/abs/2406.01581)) --
+> three orders of magnitude apart at $p=4$. Which applies here is an open question, and the
+> $1/c_{\min}^2$ factor is a heuristic for per-direction signal strength, not from any theorem.
+> Sweep `data.n` rather than trusting these numbers.
+
+## W&B metrics
+
+W&B puts each metric in the section named by its prefix before `/`: it ["organizes panels into sections based on the first prefix of the metric name"](https://docs.coreweave.com/models/track/workspaces). Metrics below follow the order that `log_run_to_wandb` ([src/experiment.py](src/experiment.py)) logs them in, because by default W&B ["does not sort panels by plot title alphabetically"](https://docs.coreweave.com/models/track/workspaces).
+
+**Notation.** $G=\frac1n\sum_i\nabla f(x_i)\nabla f(x_i)^\top$ is the network's learned AGOP and $G^*$ the target's, both $d\times d$ on the training inputs. $M=W^\top W$ is the NFM of the first-layer weights $W\in\mathbb{R}^{m\times d}$. $v_X$, $v^*_X$, $m_X$ are the eigenvectors of $G$, $G^*$, $M$ with the X-th largest eigenvalue ($\lambda_X$, $\lambda^*_X$), and $Q_M\in\mathbb{R}^{d\times r}$ holds the top $r$ eigenvectors of $M$ as columns. $H$ is the training-loss Hessian, and $\eta$ is the absolute learning rate (`lr_absolute` in the run config).
+
+**What X is.** X is an index $0,\dots,r-1$, and W&B draws one panel for each value. In `rayleighX`, `rayleigh_ratioX` and `align_dirX` it indexes the target direction $u_X$ (row X of $U$). In `align_trueX` it indexes the target-AGOP eigenvector $v^*_X$, and in `rank_trueX` the learned-AGOP eigenvector $v_X$.
+
+### `geometry/`
+
+- **`ntk_max_eigval_x2`**: $2\lambda_{\max}(K)$, where $K=\frac1n JJ^\top$ is the empirical NTK. The loss is MSE, so this is exactly the top eigenvalue of the Gauss–Newton Hessian $\frac2n J^\top J$. Its gap to `hessian_max_eigval` is the part of the sharpness that the Gauss–Newton term does not explain.
+- **`sharpness_ratio`**: $\eta\,\lambda_{\max}(H)/2$. It crosses 1 exactly at the edge of stability (EOS), $\lambda_{\max}(H)=2/\eta$, and values above 1 mean GD has passed the classical stability limit.
+- **`eos_gap`**: $\lambda_{\max}(H)-2/\eta$. It marks the same crossing as `sharpness_ratio`, in eigenvalue units, so a positive value means above EOS.
+
+### `neuron/`
+
+- **`sparsity_layer1` vs `frac_dead`**: both use the ReLU activations $a_k(x_i)$ of the first hidden layer, the only layer logged (hence "layer1"). `sparsity_layer1` $=\frac{1}{mn}\sum_{k,i}\mathbf{1}[a_k(x_i)\le 10^{-8}]$ is the fraction of (neuron, input) pairs that are off. `frac_dead` $=\frac1m\sum_k\mathbf{1}[a_k(x_i)\le 10^{-8}\ \forall i]$ is the fraction of neurons that are off on every training input (dead ReLUs), so `frac_dead` ≤ `sparsity_layer1`.
+
+### `nfm/`
+
+- **`cosine_to_agop` vs `mean_alignment`**: both test the Neural Feature Ansatz $M\propto G$. `cosine_to_agop` $=\langle M,G\rangle_F/(\|M\|_F\|G\|_F)$ compares the whole matrices, weighted by their eigenvalues. `mean_alignment` $=\frac1r\sum_X\langle m_{\pi(X)},v_X\rangle^2$, where $\pi$ is the Hungarian matching of the two top-$r$ eigenbases, compares only eigenvectors and ignores eigenvalues; it is a different metric from `subspace/nfm_mean_alignment`, which compares $M$ to $U$.
+
+### `spectrum/`
+
+- **`agop_cosine`**: $\langle G,G^*\rangle_F/(\|G\|_F\|G^*\|_F)$, which equals 1 iff $G\propto G^*$. `nfm_cosine` is the same quantity with $M$ in place of $G$.
+- **`eigvec_score`**: $\frac1r\sum_X\langle v^*_X,v_{\sigma(X)}\rangle^2$, where $\sigma$ is the Hungarian matching of the top-$r$ eigenvectors of $G$ and $G^*$; it is the mean of `nfa/align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v^*_X$ within span($U$), so this score is noise. Use the `subspace/` metrics for those targets instead.
+- **`w1_agop_target` vs `w1_nfm_agop`**: the 1-Wasserstein distance between two top-$r$ spectra, each normalized to a distribution $p_X=\lambda_X/\sum_{X'}\lambda_{X'}$ over the indices, so $W_1(p,q)=\sum_X\big|\sum_{X'\le X}(p_{X'}-q_{X'})\big|$. `w1_agop_target` compares $G$ to $G^*$ and `w1_nfm_agop` compares $M$ to $G$. Both ignore overall scale and are 0 iff the spectral shapes match.
+- **`agop_participation_ratio` vs `participation_ratio_ratio`**: `agop_participation_ratio` $=(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$ over all $d$ eigenvalues of $G$, the effective number of directions $G$ uses (exactly $k$ for a flat rank-$k$ spectrum). The `_ratio` suffix, which `stable_rank_ratio` and `intrinsic_dim_ratio` also carry, divides the learned statistic by the same statistic of $G^*$. So `participation_ratio_ratio` is 1 when $G$ has the target's effective rank and above 1 when $G$ spreads over more directions.
+- **`rayleighX` vs `rayleigh_ratioX`**: `rayleighX` $=u_X^\top G\,u_X$ is the learned AGOP's energy along target direction X. `rayleigh_ratioX` divides it by $\lambda^*_X$, the X-th largest target eigenvalue. That denominator equals $u_X^\top G^*u_X$, making 1 mean "matched", only when $G^*$ is diagonal in the $U$ basis with eigenvalues decreasing in X; product terms or cycled degrees can break this.
+
+### `subspace/`
+
+- **`nfm_cos_max`**: the largest cosine among the principal angles between the top-$r$ eigenspace of $M$ and span($U$), i.e. how well the best-captured direction is recovered. It has no AGOP counterpart only because `log_run_to_wandb` doesn't log one. `subspace_recovery` ([src/metrics.py](src/metrics.py)) computes `agop_cos_max` and per-direction AGOP alignments as well.
+- **`nfm_subspace_dist` vs `agop_subspace_dist`**: the chordal distance $\|\sin\Theta\|_F=\sqrt{r\,(1-a)}$ between span($U$) and the top-$r$ eigenspace of $M$ (`nfm_`) or $G$ (`agop_`), where $a$ is the matching `*_mean_alignment`. It runs from 0 (subspace recovered) to $\sqrt r$ (orthogonal). Comparing the two shows whether the weights or the AGOP find the subspace first.
+- **`align_dirX`**: $\|Q_M^\top u_X\|^2\in[0,1]$, the fraction of target direction X that lies in the NFM's top-$r$ eigenspace (it is logged for the NFM only). `nfm_mean_alignment` is its mean over X.
+
+### `nfa/`
+
+- **`align_trueX` vs `rank_trueX`**: both come from the matching $\sigma$ behind `spectrum/eigvec_score`, and "true" means an eigenvector of $G^*$, not a row of $U$. `align_trueX` $=\langle v^*_X,v_{\sigma(X)}\rangle^2$ is keyed by target eigenvector X. Despite its name, `rank_trueX` $=\sigma^{-1}(X)$ is keyed by learned eigenvector X: it is the index of the target eigenvector matched to $v_X$, and it agrees with the intended $\sigma(X)$ unless the matching contains a cycle of length ≥ 3.
 
 ## Repository structure
 
