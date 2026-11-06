@@ -73,6 +73,7 @@ def expand(cfg):
         for k, v in zip(keys, combo):
             set_in(one, k, v)
         one["_sweep_axes"] = dict(zip(keys, combo))
+        one["_sweep_index"] = {k: sweep[k].index(v) for k, v in zip(keys, combo)}
         out.append(one)
     return out
 
@@ -102,23 +103,33 @@ def run_config(cfg):
 
 
 def run_name(cfg):
-    """{experiment}_{parameterization}_m={width}_lr={lr}
+    """{experiment}_{axis}={value}..._lr={lr}, built from the axes this sweep varies.
 
-        subspace-recovery_spectral_m=512_lr=1.8
+        width-sweep_width=512_alpha=0_lr=1.8
+        target-sweep_terms=2_alpha=1_lr=1.8
 
-    The experiment prefix is `name:` from the YAML. Everything in the name is
-    also in the config and filterable there -- the name exists so a run is
-    identifiable at a glance in the run table and in overlay legends, not as a
-    search key. Under optim.lr_mode: relative the lr shown is the multiple of
-    eta_crit, which is the quantity the grid is defined in; the absolute value
-    is logged as config.lr_absolute.
+    The name is built from _sweep_axes rather than a fixed field list, so every
+    varied axis appears and names are unique. A fixed list silently collides the
+    moment a config sweeps something it does not mention -- sweeping target.alpha
+    alone put 2 runs on every name, and target.terms put 8.
+
+    Axes whose values are not scalars (target.terms is a list of dicts) are
+    labelled by their index in the sweep list; the full value is in the logged
+    config, which is what you filter on anyway.
     """
-    return "_".join([
-        cfg.get("name", "run"),
-        str(get_in(cfg, "model.parameterization")),
-        f"m={get_in(cfg, 'model.width')}",
-        f"lr={get_in(cfg, 'optim.lr'):.5g}",
-    ])
+    parts = [cfg.get("name", "run")]
+    axes  = cfg.get("_sweep_axes") or {}
+    index = cfg.get("_sweep_index") or {}
+    for dotted, value in axes.items():
+        short = dotted.split(".")[-1]
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            parts.append(f"{short}={index.get(dotted, 0)}")
+        elif isinstance(value, float):
+            parts.append(f"{short}={value:.5g}")
+        else:
+            parts.append(f"{short}={value}")
+    parts.append(f"lr={get_in(cfg, 'optim.lr'):.5g}")
+    return "_".join(parts)
 
 
 def group_name(cfg):
