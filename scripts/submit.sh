@@ -16,7 +16,12 @@ from config import load_config, get_in
 print(get_in(load_config('$CFG'), '$1'))"; }
 
 mkdir -p "$(get paths.outputs)/slurm"
-sbatch --account="$(get slurm.account)" \
+ACCOUNT="${SLURM_ACCOUNT:-$(get slurm.account)}"
+if [ -z "$ACCOUNT" ]; then
+  echo "error: no account. export SLURM_ACCOUNT=def-<pi>" >&2; exit 1
+fi
+
+sbatch --account="$ACCOUNT" \
        --gpus="$(get slurm.gpus)" \
        --cpus-per-task="$(get slurm.cpus_per_task)" \
        --mem="$(get slurm.mem)" \
