@@ -29,7 +29,7 @@ PANELS = [
     ("loss",                       "loss",                    True),
     ("nfa/nfa_cosine",             "NFA cosine",              False),
     ("subspace/nfm_mean_alignment","subspace alignment",      False),
-    ("nfa/agop_nuclear",           "AGOP nuclear norm",       True),
+    ("agop/agop_nuclear",          "AGOP nuclear norm",       True),
     ("neuron/sparsity_layer1",     "neuron sparsity",         False),
     ("geometry/sharpness_ratio",   "sharpness / (2/lr)",      True),
 ]

@@ -200,7 +200,7 @@ A low-degree term masks a high-degree one: `[{0:2},{0:4}]` costs the same as `[{
 
 ## W&B metrics
 
-W&B organizes panels into sections based on the first prefix of the metric name and metrics below follow the order that `log_run_to_wandb` of [src/experiment.py](src/experiment.py) logs them in. Sections are split so that none logs a function of another section's metrics: `nfa/` compares whole matrices, `spectrum/` eigenvalues, and `subspace/` eigenvectors and eigenspaces.
+W&B organizes panels into sections based on the first prefix of the metric name and metrics below follow the order that `log_run_to_wandb` of [src/experiment.py](src/experiment.py) logs them in. Sections are split by what is compared, and none logs a function of another section's metrics: `nfa/` compares the NFM $M$ with the AGOPs ($G$ and $G^{\ast}$) in any respect, `agop/` holds the learned AGOP $G$ alone and against the target AGOP $G^{\ast}$, and `subspace/` compares the top-$r$ eigenspaces of $M$ and $G$ with span($U$).
 
 **Definitions.** For $d\times d$ PSD matrices $A,B$ with eigenvalues $\lambda_1(A)\ge\lambda_2(A)\ge\dots$:
 
@@ -208,7 +208,7 @@ W&B organizes panels into sections based on the first prefix of the metric name 
 - **Effective ranks**: the stable rank $\mathrm{srank}(A)=\sum_i\lambda_i^2/\lambda_1^2$, intrinsic dimension $\mathrm{idim}(A)=\sum_i\lambda_i/\lambda_1$ and participation ratio $\mathrm{PR}(A)=(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$. Always $\mathrm{srank}\le\mathrm{idim}\le\mathrm{PR}$, with all three equal to $k$ on a flat rank-$k$ spectrum: srank is dominated by the top eigenvalue, idim gives the tail more weight, and PR counts the directions with comparable eigenvalues.
 - **Wasserstein-1**: $W_1(A,B)=\sum_X\big|\sum_{X'\le X}(p_{X'}-q_{X'})\big|$, where $p_X=\lambda_X(A)/\sum_{X'}\lambda_{X'}(A)$ normalizes the top-$r$ spectrum of $A$ and $q$ does the same for $B$. It ignores overall scale and is 0 iff the spectral shapes match.
 - **Matching**: for orthonormal $r$-frames $(a_X)$ and $(b_X)$, $\sigma_{a,b}$ is the permutation maximizing $\sum_X\langle a_{\sigma(X)},b_X\rangle^2$ (Hungarian algorithm), pairing each $b_X$ with $a_{\sigma(X)}$.
-- **Principal angles**: $\theta_1\le\dots\le\theta_r$ between a top-$r$ eigenspace and span($U$), with $\cos\theta_X$ the singular values of $Q^\top U^\top$. The prefix `nfm_` or `agop_` says whether $Q$ is $Q_M$ or $Q_G$.
+- **Principal angles**: $\theta_1\le\dots\le\theta_r$ between two $r$-dimensional subspaces with orthonormal bases $P,Q\in\mathbb{R}^{d\times r}$, with $\cos\theta_X$ the singular values of $P^\top Q$; $\Vert\sin\Theta\Vert_F^2=\sum_X\sin^2\theta_X$ is the squared chordal distance, from 0 (equal) to $r$ (orthogonal). In `subspace/`, $P=U^\top$ and the prefix `nfm_` or `agop_` says whether $Q$ is $Q_M$ or $Q_G$. In `nfa/`, $P=Q_M$ and $Q=Q_G$.
 - **`_ratio` suffix**: the learned statistic divided by the same statistic of the target AGOP $G^{\ast}$.
 
 Metrics without a prefix:
@@ -237,11 +237,18 @@ All six use the activations $A\in\mathbb{R}^{n\times m}$, $A_{ik}=a_k(x_i)$, of 
 
 ### `nfa/`
 
-Whole-matrix comparisons of $M$, $G$ and $G^{\ast}$. The ranks of $G$ use all $d$ of its eigenvalues ($G^{\ast}$ has rank at most $r$).
+The NFM $M$ against the AGOPs: the learned $G$, which is the Neural Feature Ansatz, and the target $G^{\ast}$.
 
-- **`nfa_cosine`**: $\cos(M,G)$, the Neural Feature Ansatz $M\propto G$. Unlike `subspace/mean_matched_alignment`, it weights directions by their eigenvalues.
-- **`agop_cosine`**: $\cos(G,G^{\ast})$, which is 1 iff the learned AGOP is proportional to the target's.
-- **`nfm_cosine`**: $\cos(M,G^{\ast})$, comparing the NFM directly to the target AGOP.
+- **`nfa_cosine`**: $\cos(M,G)$, the Neural Feature Ansatz $M\propto G$. Unlike `mean_matched_alignment` and `nfm_agop_subspace_dist_sq`, it weights directions by their eigenvalues.
+- **`nfm_cosine`**: $\cos(M,G^{\ast})$, comparing the NFM directly to the target AGOP. Unlike `nfa_cosine`, it compares $M$ with the target's AGOP rather than the network's; when $M\propto G$ it equals `agop/agop_cosine`.
+- **`mean_matched_alignment`**: $\frac1r\sum_X\langle m_{\sigma(X)},v_X\rangle^2$ with $\sigma=\sigma_{m,v}$, the Neural Feature Ansatz at the level of eigenvectors. Unlike `nfa_cosine`, it ignores eigenvalues, and unlike `subspace/nfm_mean_alignment`, it compares $M$ to $G$ rather than to $U$. When eigenvalues of $G$ are nearly tied, which eigenvector pairs with which is noise, and so is this metric.
+- **`nfm_agop_subspace_dist_sq`**: $\Vert\sin\Theta\Vert_F^2$ between $Q_M$ and $Q_G$, from 0 (the top-$r$ eigenspaces of $M$ and $G$ coincide) to $r$ (orthogonal). Unlike `mean_matched_alignment`, it compares the two eigenspaces as wholes, so tied eigenvalues do not affect it. It is the NFA counterpart of `subspace/nfm_subspace_dist_sq`.
+- **`wasserstein1_nfm_agop`**: $W_1(M,G)$, a spectral NFA test that needs no target. Unlike `agop/wasserstein1_agop_target`, it compares $M$ with $G$ rather than $G$ with $G^{\ast}$.
+
+### `agop/`
+
+The learned AGOP $G$ alone and against the target AGOP $G^{\ast}$. The ranks of $G$ use all $d$ of its eigenvalues ($G^{\ast}$ has rank at most $r$).
+
 - **`agop_nuclear`**: $\Vert G\Vert_{\ast}=\mathrm{tr}(G)=\frac1n\sum_i\Vert\nabla f(x_i)\Vert^2$, the network's mean squared input-gradient norm.
 - **`nuclear_ratio`**: $\mathrm{tr}(G)/\mathrm{tr}(G^{\ast})$, which is 1 when the network's gradient energy matches the target's.
 - **`agop_stable_rank`**: $\mathrm{srank}(G)$.
@@ -250,15 +257,17 @@ Whole-matrix comparisons of $M$, $G$ and $G^{\ast}$. The ranks of $G$ use all $d
 - **`stable_rank_ratio`**: $\mathrm{srank}(G)/\mathrm{srank}(G^{\ast})$.
 - **`intrinsic_dim_ratio`**: $\mathrm{idim}(G)/\mathrm{idim}(G^{\ast})$.
 - **`participation_ratio_ratio`**: $\mathrm{PR}(G)/\mathrm{PR}(G^{\ast})$, which is 1 when $G$ has the target's effective rank and above 1 when $G$ spreads over more directions.
-
-### `spectrum/`
-
-- **`wasserstein1_agop_target`**: $W_1(G,G^{\ast})$. Unlike `wasserstein1_nfm_agop`, it measures progress toward the target.
-- **`wasserstein1_nfm_agop`**: $W_1(M,G)$, a spectral NFA test that needs no target.
+- **`wasserstein1_agop_target`**: $W_1(G,G^{\ast})$. Unlike `nfa/wasserstein1_nfm_agop`, it measures progress toward the target.
+- **`agop_cosine`**: $\cos(G,G^{\ast})$, which is 1 iff the learned AGOP is proportional to the target's. Unlike `subspace/agop_subspace_dist_sq`, it weights directions by their eigenvalues, so it also needs the target's spectrum, not only its subspace.
+- **`mean_align_true`**: the mean of `align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v_X^{\ast}$ within span($U$), so this is noise; use the principal-angle metrics in `subspace/` for those targets instead.
 - **`rayleighX`**: $u_X^\top Gu_X$, the learned AGOP's energy along target direction X; X indexes the rows $u_X$ of $U$. Unlike `rayleigh_ratioX`, it is not normalized by the target.
 - **`rayleigh_ratioX`**: `rayleighX` divided by $\lambda_X^{\ast}$; X indexes the target direction $u_X$ in the numerator and the X-th largest target eigenvalue in the denominator. That denominator equals $u_X^\top G^{\ast}u_X$, making 1 mean "matched", only when $G^{\ast}$ is diagonal in the $U$ basis with eigenvalues decreasing in X; product terms or cycled degrees can break this.
+- **`align_trueX`**: $\langle v_{\sigma(X)},v_X^{\ast}\rangle^2$ with $\sigma=\sigma_{v,v^{\ast}}$; X indexes the target-AGOP eigenvectors $v_X^{\ast}$ ("true" means an eigenvector of $G^{\ast}$, not a row of $U$). Unlike `rank_trueX`, it says how well $v_X^{\ast}$ is matched, not by which learned eigenvector.
+- **`rank_trueX`**: $\sigma(X)$, the index of the learned-AGOP eigenvector matched to $v_X^{\ast}$; X indexes $v_X^{\ast}$. It reads X when $G$ orders the directions as $G^{\ast}$ does. Runs logged under the old key `nfa/rank_trueX` hold the inverse permutation instead.
 
 ### `subspace/`
+
+The top-$r$ eigenspaces of the learned $M$ and $G$ against the target subspace span($U$).
 
 - **`nfm_mean_alignment`**: $\frac1r\sum_X\cos^2\theta_X$, the mean of `align_dirX`, which is 1 iff the subspace is recovered.
 - **`nfm_cos_max`**: $\cos\theta_1$, i.e. how well the best-captured direction is recovered. It has no AGOP counterpart only because `log_run_to_wandb` doesn't log one: `subspace_recovery` ([src/metrics.py](src/metrics.py)) computes `agop_cos_max` and per-direction AGOP alignments as well.
@@ -267,11 +276,7 @@ Whole-matrix comparisons of $M$, $G$ and $G^{\ast}$. The ranks of $G$ use all $d
 - **`agop_mean_alignment`**: `nfm_mean_alignment` for $Q_G$.
 - **`agop_sin_max`**: `nfm_sin_max` for $Q_G$.
 - **`agop_subspace_dist_sq`**: `nfm_subspace_dist_sq` for $Q_G$. Compared with `nfm_subspace_dist_sq`, it shows whether the AGOP or the weights find the subspace first.
-- **`mean_matched_alignment`**: $\frac1r\sum_X\langle m_{\sigma(X)},v_X\rangle^2$ with $\sigma=\sigma_{m,v}$, the Neural Feature Ansatz at the level of eigenvectors. Unlike `nfa/nfa_cosine`, it ignores eigenvalues, and unlike `nfm_mean_alignment`, it compares $M$ to $G$ rather than to $U$.
-- **`mean_align_true`**: the mean of `align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v_X^{\ast}$ within span($U$), so this is noise; use the principal-angle metrics for those targets instead.
 - **`align_dirX`**: $\Vert Q_M^\top u_X\Vert^2\in[0,1]$, the fraction of target direction X inside the NFM's top-$r$ eigenspace; X indexes the rows $u_X$ of $U$. It is logged for the NFM only.
-- **`align_trueX`**: $\langle v_{\sigma(X)},v_X^{\ast}\rangle^2$ with $\sigma=\sigma_{v,v^{\ast}}$; X indexes the target-AGOP eigenvectors $v_X^{\ast}$ ("true" means an eigenvector of $G^{\ast}$, not a row of $U$). Unlike `rank_trueX`, it says how well $v_X^{\ast}$ is matched, not by which learned eigenvector.
-- **`rank_trueX`**: $\sigma(X)$, the index of the learned-AGOP eigenvector matched to $v_X^{\ast}$; X indexes $v_X^{\ast}$. It reads X when $G$ orders the directions as $G^{\ast}$ does. Runs logged under the old key `nfa/rank_trueX` hold the inverse permutation instead.
 
 ### `slices/`
 
@@ -292,7 +297,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 - **`eos_first_step`**: the first step with `sharpness_ratio` ≥ 1, or −1 if the run never reaches EOS.
 - **`eos_fraction`**: the fraction of steps with `sharpness_ratio` ≥ 1.
 - **`infeasible`**: on sweep runs tagged `infeasible` only, the `limits:` check the cell failed. These runs have no other metrics.
-- **`final_<metric>`**: the last-step value of `subspace/{nfm,agop}_{mean_alignment,subspace_dist_sq}`, `subspace/mean_align_true` and `nfa/{agop_cosine,nuclear_ratio,intrinsic_dim_ratio,stable_rank_ratio}`.
+- **`final_<metric>`**: the last-step value of `subspace/{nfm,agop}_{mean_alignment,subspace_dist_sq}` and `agop/{agop_cosine,mean_align_true,nuclear_ratio,intrinsic_dim_ratio,stable_rank_ratio}`.
 
 ### Aggregate run
 
