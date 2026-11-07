@@ -240,7 +240,10 @@ def log_run_to_wandb(out, run=None):
             "nfa/nfa_cosine":                float(m["nfa_correlation"]["matrix_correlation"][t]),
             "nfa/nfm_cosine":                float(m["target"]["nfm_cosine"][t]),
             "nfa/mean_matched_alignment":    float(m["nfa_eigen_alignment"]["score"][t]),
-            "nfa/nfm_agop_subspace_dist_sq": float(m["nfa_eigen_alignment"]["subspace_dist_sq"][t]),
+            "nfa/nfm_agop_mean_alignment":   float(m["nfa_eigen_alignment"]["nfm_agop_mean_alignment"][t]),
+            "nfa/nfm_agop_cos_max":          float(m["nfa_eigen_alignment"]["nfm_agop_cos_max"][t]),
+            "nfa/nfm_agop_sin_max":          float(m["nfa_eigen_alignment"]["nfm_agop_sin_max"][t]),
+            "nfa/nfm_agop_subspace_dist_sq": float(m["nfa_eigen_alignment"]["nfm_agop_subspace_dist_sq"][t]),
             "nfa/wasserstein1_nfm_agop":     float(m["target"]["wasserstein1_nfm_agop"][t]),
 
             # The learned AGOP G alone and against the target AGOP G*
@@ -267,9 +270,11 @@ def log_run_to_wandb(out, run=None):
             "subspace/agop_subspace_dist_sq": float(m["subspace"]["agop_subspace_dist_sq"][t]),
         }
         # Per index X, one metric at a time so each family's panels stay together.
-        # X is the target direction u_X for rayleigh / align_dir, and the target
-        # AGOP eigenvector v*_X for align_true / rank_true.
+        # X is the target direction u_X for rayleigh / align_dir, the target AGOP
+        # eigenvector v*_X for align_true / rank_true, and the learned AGOP
+        # eigenvector v_X for nfm_agop_align_dir.
         per_index = (
+            ("nfa/nfm_agop_align_dir",  m["nfa_eigen_alignment"]["nfm_agop_alignment"], float),
             ("agop/rayleigh",           m["target"]["rayleigh"],        float),
             ("agop/rayleigh_ratio",     m["target"]["rayleigh_ratio"],  float),
             ("agop/align_true",         m["target"]["align_true"],      float),

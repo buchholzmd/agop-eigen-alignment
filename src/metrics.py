@@ -67,13 +67,16 @@ def nfa_alignment(state, **kwargs):
     """The NFA at the level of eigenvectors and eigenspaces: top-r NFM vs top-r AGOP.
 
     align_bases matches individual eigenvectors, which is unstable when
-    eigenvalues are tied; subspace_dist_sq compares the two top-r eigenspaces
-    by their principal angles, which is not.
+    eigenvalues are tied. The nfm_agop_ entries are the subspace_recovery suite
+    (principal angles) with the NFM eigenspace in place of span(U) as the frame
+    and the AGOP eigenvectors as the directions: nfm_agop_alignment[X] is the
+    fraction of AGOP eigenvector X inside the NFM's top-r eigenspace.
     """
     M = kwargs["nfm_eigs"]
     G = kwargs["agop_eigs"]
     result = align_bases(M["eigvecs"], G["eigvecs"])
-    result["subspace_dist_sq"] = subspace_angles(M["eigvecs"], G["eigvecs"])["subspace_dist_sq"]
+    result.update({f"nfm_agop_{name}": value
+                   for name, value in subspace_angles(M["eigvecs"], G["eigvecs"]).items()})
     return result
 
 def neuron_sparsity(state, model=None, X=None, activations=None, **kwargs):

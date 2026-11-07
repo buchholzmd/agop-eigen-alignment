@@ -208,7 +208,7 @@ W&B organizes panels into sections based on the first prefix of the metric name 
 - **Effective ranks**: the stable rank $\mathrm{srank}(A)=\sum_i\lambda_i^2/\lambda_1^2$, intrinsic dimension $\mathrm{idim}(A)=\sum_i\lambda_i/\lambda_1$ and participation ratio $\mathrm{PR}(A)=(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$. Always $\mathrm{srank}\le\mathrm{idim}\le\mathrm{PR}$, with all three equal to $k$ on a flat rank-$k$ spectrum: srank is dominated by the top eigenvalue, idim gives the tail more weight, and PR counts the directions with comparable eigenvalues.
 - **Wasserstein-1**: $W_1(A,B)=\sum_X\big|\sum_{X'\le X}(p_{X'}-q_{X'})\big|$, where $p_X=\lambda_X(A)/\sum_{X'}\lambda_{X'}(A)$ normalizes the top-$r$ spectrum of $A$ and $q$ does the same for $B$. It ignores overall scale and is 0 iff the spectral shapes match.
 - **Matching**: for orthonormal $r$-frames $(a_X)$ and $(b_X)$, $\sigma_{a,b}$ is the permutation maximizing $\sum_X\langle a_{\sigma(X)},b_X\rangle^2$ (Hungarian algorithm), pairing each $b_X$ with $a_{\sigma(X)}$.
-- **Principal angles**: $\theta_1\le\dots\le\theta_r$ between two $r$-dimensional subspaces with orthonormal bases $P,Q\in\mathbb{R}^{d\times r}$, with $\cos\theta_X$ the singular values of $P^\top Q$; $\Vert\sin\Theta\Vert_F^2=\sum_X\sin^2\theta_X$ is the squared chordal distance, from 0 (equal) to $r$ (orthogonal). In `subspace/`, $P=U^\top$ and the prefix `nfm_` or `agop_` says whether $Q$ is $Q_M$ or $Q_G$. In `nfa/`, $P=Q_M$ and $Q=Q_G$.
+- **Principal angles**: $\theta_1\le\dots\le\theta_r$ between two $r$-dimensional subspaces with orthonormal bases $P,Q\in\mathbb{R}^{d\times r}$, with $\cos\theta_X$ the singular values of $P^\top Q$; $\Vert\sin\Theta\Vert_F^2=\sum_X\sin^2\theta_X$ is the squared chordal distance, from 0 (equal) to $r$ (orthogonal). In `subspace/`, $P=U^\top$ and the prefix `nfm_` or `agop_` says whether $Q$ is $Q_M$ or $Q_G$. In `nfa/`, $P=Q_M$ and $Q=Q_G$, with the prefix `nfm_agop_`.
 - **`_ratio` suffix**: the learned statistic divided by the same statistic of the target AGOP $G^{\ast}$.
 
 Metrics without a prefix:
@@ -237,13 +237,17 @@ All six use the activations $A\in\mathbb{R}^{n\times m}$, $A_{ik}=a_k(x_i)$, of 
 
 ### `nfa/`
 
-The NFM $M$ against the AGOPs: the learned $G$, which is the Neural Feature Ansatz, and the target $G^{\ast}$.
+The NFM $M$ against the AGOPs: the learned $G$, which is the Neural Feature Ansatz, and the target $G^{\ast}$. The `nfm_agop_` metrics are the principal-angle suite of `subspace/` with the NFM's top-$r$ eigenspace $Q_M$ in place of span($U$) and the AGOP's $Q_G$ as the subspace compared with it.
 
-- **`nfa_cosine`**: $\cos(M,G)$, the Neural Feature Ansatz $M\propto G$. Unlike `mean_matched_alignment` and `nfm_agop_subspace_dist_sq`, it weights directions by their eigenvalues.
+- **`nfa_cosine`**: $\cos(M,G)$, the Neural Feature Ansatz $M\propto G$. Unlike `mean_matched_alignment` and the `nfm_agop_` metrics, it weights directions by their eigenvalues.
 - **`nfm_cosine`**: $\cos(M,G^{\ast})$, comparing the NFM directly to the target AGOP. Unlike `nfa_cosine`, it compares $M$ with the target's AGOP rather than the network's; when $M\propto G$ it equals `agop/agop_cosine`.
 - **`mean_matched_alignment`**: $\frac1r\sum_X\langle m_{\sigma(X)},v_X\rangle^2$ with $\sigma=\sigma_{m,v}$, the Neural Feature Ansatz at the level of eigenvectors. Unlike `nfa_cosine`, it ignores eigenvalues, and unlike `subspace/nfm_mean_alignment`, it compares $M$ to $G$ rather than to $U$. When eigenvalues of $G$ are nearly tied, which eigenvector pairs with which is noise, and so is this metric.
-- **`nfm_agop_subspace_dist_sq`**: $\Vert\sin\Theta\Vert_F^2$ between $Q_M$ and $Q_G$, from 0 (the top-$r$ eigenspaces of $M$ and $G$ coincide) to $r$ (orthogonal). Unlike `mean_matched_alignment`, it compares the two eigenspaces as wholes, so tied eigenvalues do not affect it. It is the NFA counterpart of `subspace/nfm_subspace_dist_sq`.
+- **`nfm_agop_mean_alignment`**: $\frac1r\sum_X\cos^2\theta_X$ between $Q_M$ and $Q_G$, the mean of `nfm_agop_align_dirX`, which is 1 iff the top-$r$ eigenspaces of $M$ and $G$ coincide. Unlike `mean_matched_alignment`, which can only be smaller, it does not require the eigenvectors to pair up one to one, so tied eigenvalues do not affect it.
+- **`nfm_agop_cos_max`**: $\cos\theta_1$, the overlap of the best-aligned pair of directions in the two eigenspaces.
+- **`nfm_agop_sin_max`**: $\sin\theta_r$, the misalignment of the worst-aligned pair, which is 0 iff the two eigenspaces coincide.
+- **`nfm_agop_subspace_dist_sq`**: $\Vert\sin\Theta\Vert_F^2=r(1-a)$ between $Q_M$ and $Q_G$, with $a$ = `nfm_agop_mean_alignment`, from 0 (the eigenspaces coincide) to $r$ (orthogonal). It is the NFA counterpart of `subspace/nfm_subspace_dist_sq`.
 - **`wasserstein1_nfm_agop`**: $W_1(M,G)$, a spectral NFA test that needs no target. Unlike `agop/wasserstein1_agop_target`, it compares $M$ with $G$ rather than $G$ with $G^{\ast}$.
+- **`nfm_agop_align_dirX`**: $\Vert Q_M^\top v_X\Vert^2\in[0,1]$, the fraction of AGOP eigenvector X inside the NFM's top-$r$ eigenspace; X indexes the eigenvectors $v_X$ of $G$. Unlike `subspace/align_dirX`, its directions are the AGOP's eigenvectors rather than the rows of $U$, so, like `mean_matched_alignment`, it is noise when eigenvalues of $G$ are tied.
 
 ### `agop/`
 
