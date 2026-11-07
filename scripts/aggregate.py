@@ -27,9 +27,9 @@ from metrics import fit_power_law, classify_regime
 # (metric key, axis label, log scale)
 PANELS = [
     ("loss",                       "loss",                    True),
-    ("nfm/cosine_to_agop",         "NFA cosine",              False),
+    ("nfa/nfa_cosine",             "NFA cosine",              False),
     ("subspace/nfm_mean_alignment","subspace alignment",      False),
-    ("spectrum/agop_nuclear",      "AGOP nuclear norm",       True),
+    ("nfa/agop_nuclear",           "AGOP nuclear norm",       True),
     ("neuron/sparsity_layer1",     "neuron sparsity",         False),
     ("geometry/sharpness_ratio",   "sharpness / (2/lr)",      True),
 ]

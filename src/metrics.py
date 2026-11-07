@@ -190,17 +190,24 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
     agop_rank      = rank_stats(kwargs["agop_eigs"]["spectrum"])
     target_rank    = rank_stats(target_eigvals)
 
+    # align_bases keys perm by the LEARNED eigenvector (perm[i] = target matched
+    # to learned i). Inverting it keys both series below by the TARGET
+    # eigenvector X, so a series never changes meaning when the matching does:
+    # rank_true[X] = learned eigenvector matched to target eigenvector X.
+    rank_true  = jnp.argsort(alignment["perm"])
+    align_true = alignment["overlap_matrix"][rank_true, jnp.arange(rank_true.shape[0])]
+
     return {
-        "agop_cosine":    matrix_cosine(learned_agop, target_agop),
-        "nfm_cosine":     matrix_cosine(learned_nfm, target_agop),
-        "eigvec_score":   alignment["score"],
-        "eigvec_matched": alignment["matched"],
-        "eigvec_perm":    alignment["perm"],
-        "agop_nuclear":   agop_nuclear,
-        "target_nuclear": target_nuclear,
-        "nuclear_ratio":  agop_nuclear / (target_nuclear + 1e-12),
-        "w1_agop_target": wasserstein_1d(agop_eigvals, target_eigvals),
-        "w1_nfm_agop":    wasserstein_1d(nfm_eigvals, agop_eigvals),
+        "agop_cosine":     matrix_cosine(learned_agop, target_agop),
+        "nfm_cosine":      matrix_cosine(learned_nfm, target_agop),
+        "mean_align_true": alignment["score"],
+        "align_true":      align_true,
+        "rank_true":       rank_true,
+        "agop_nuclear":    agop_nuclear,
+        "target_nuclear":  target_nuclear,
+        "nuclear_ratio":   agop_nuclear / (target_nuclear + 1e-12),
+        "wasserstein1_agop_target": wasserstein_1d(agop_eigvals, target_eigvals),
+        "wasserstein1_nfm_agop":    wasserstein_1d(nfm_eigvals, agop_eigvals),
         "rayleigh":       rayleigh,
         "rayleigh_ratio": rayleigh / (target_eigvals + 1e-12),
         **{f"agop_{name}": value for name, value in agop_rank.items()},
@@ -326,7 +333,7 @@ def run_summary(metrics, lr):
     }
     for group, keys in (("subspace", ("nfm_mean_alignment", "nfm_subspace_dist",
                                       "agop_mean_alignment", "agop_subspace_dist")),
-                        ("target",   ("agop_cosine", "eigvec_score", "nuclear_ratio",
+                        ("target",   ("agop_cosine", "mean_align_true", "nuclear_ratio",
                                       "intrinsic_dim_ratio", "stable_rank_ratio"))):
         for key in keys:
             if key in metrics.get(group, {}):

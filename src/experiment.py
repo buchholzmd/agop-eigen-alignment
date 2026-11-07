@@ -198,8 +198,10 @@ def log_run_to_wandb(out):
                      reinit=True)
     m, r = out["metrics"], out["r"]
     lr = out["lr"]
-    matched = jnp.stack(m["nfa_eigen_alignment"]["matched"])
 
+    # Sections follow one rule: no section logs a function of another section's
+    # metrics. nfa/ compares whole matrices (M, G, G*), spectrum/ compares
+    # eigenvalues, subspace/ compares eigenvectors and eigenspaces.
     for t in range(len(m["loss"])):
         hessian_max = float(m["hessian"]["max_eigvals"][t])
         row = {
@@ -223,26 +225,25 @@ def log_run_to_wandb(out):
             "neuron/sparsity_layer1": float(m["sparsity"]["value"][t][0].mean()),
             "neuron/frac_dead":       float((m["sparsity"]["value"][t][0] == 1.0).mean()),
 
-            # NFM, against the AGOP (the literal Neural Feature Ansatz)
-            "nfm/cosine_to_agop": float(m["nfa_correlation"]["matrix_correlation"][t]),
-            "nfm/mean_alignment": float(matched[t].mean()),
+            # Whole matrices: NFM M, learned AGOP G, target AGOP G*.
+            # nfa_cosine = cos(M, G) is the literal Neural Feature Ansatz.
+            "nfa/nfa_cosine":    float(m["nfa_correlation"]["matrix_correlation"][t]),
+            "nfa/agop_cosine":   float(m["target"]["agop_cosine"][t]),
+            "nfa/nfm_cosine":    float(m["target"]["nfm_cosine"][t]),
+            "nfa/agop_nuclear":  float(m["target"]["agop_nuclear"][t]),
+            "nfa/nuclear_ratio": float(m["target"]["nuclear_ratio"][t]),
+            "nfa/agop_stable_rank":         float(m["target"]["agop_stable_rank"][t]),
+            "nfa/agop_intrinsic_dim":       float(m["target"]["agop_intrinsic_dim"][t]),
+            "nfa/agop_participation_ratio": float(m["target"]["agop_participation_ratio"][t]),
+            "nfa/stable_rank_ratio":         float(m["target"]["stable_rank_ratio"][t]),
+            "nfa/intrinsic_dim_ratio":       float(m["target"]["intrinsic_dim_ratio"][t]),
+            "nfa/participation_ratio_ratio": float(m["target"]["participation_ratio_ratio"][t]),
 
-            # Spectrum, against the target AGOP
-            "spectrum/agop_cosine":    float(m["target"]["agop_cosine"][t]),
-            "spectrum/nfm_cosine":     float(m["target"]["nfm_cosine"][t]),
-            "spectrum/eigvec_score":   float(m["target"]["eigvec_score"][t]),
-            "spectrum/agop_nuclear":   float(m["target"]["agop_nuclear"][t]),
-            "spectrum/nuclear_ratio":  float(m["target"]["nuclear_ratio"][t]),
-            "spectrum/w1_agop_target": float(m["target"]["w1_agop_target"][t]),
-            "spectrum/w1_nfm_agop":    float(m["target"]["w1_nfm_agop"][t]),
-            "spectrum/agop_stable_rank":         float(m["target"]["agop_stable_rank"][t]),
-            "spectrum/agop_intrinsic_dim":       float(m["target"]["agop_intrinsic_dim"][t]),
-            "spectrum/agop_participation_ratio": float(m["target"]["agop_participation_ratio"][t]),
-            "spectrum/stable_rank_ratio":         float(m["target"]["stable_rank_ratio"][t]),
-            "spectrum/intrinsic_dim_ratio":       float(m["target"]["intrinsic_dim_ratio"][t]),
-            "spectrum/participation_ratio_ratio": float(m["target"]["participation_ratio_ratio"][t]),
+            # Eigenvalues (rayleighX / rayleigh_ratioX are added below)
+            "spectrum/wasserstein1_agop_target": float(m["target"]["wasserstein1_agop_target"][t]),
+            "spectrum/wasserstein1_nfm_agop":    float(m["target"]["wasserstein1_nfm_agop"][t]),
 
-            # Subspace recovery
+            # Eigenvectors and eigenspaces (align_dirX / align_trueX / rank_trueX below)
             "subspace/nfm_mean_alignment":   float(m["subspace"]["nfm_mean_alignment"][t]),
             "subspace/nfm_cos_max":          float(m["subspace"]["nfm_cos_max"][t]),
             "subspace/nfm_sin_max":          float(m["subspace"]["nfm_sin_max"][t]),
@@ -250,15 +251,22 @@ def log_run_to_wandb(out):
             "subspace/agop_mean_alignment":  float(m["subspace"]["agop_mean_alignment"][t]),
             "subspace/agop_sin_max":         float(m["subspace"]["agop_sin_max"][t]),
             "subspace/agop_subspace_dist":   float(m["subspace"]["agop_subspace_dist"][t]),
+            "subspace/mean_matched_alignment": float(m["nfa_eigen_alignment"]["score"][t]),
+            "subspace/mean_align_true":        float(m["target"]["mean_align_true"][t]),
         }
-        # Per direction, keyed by the TRUE direction j so the series never moves.
-        # The matched eigenvector index is logged as its own series instead.
-        for j in range(r):
-            row[f"nfa/align_true{j}"]         = float(m["target"]["eigvec_matched"][t][j])
-            row[f"nfa/rank_true{j}"]          = int(m["target"]["eigvec_perm"][t][j])
-            row[f"subspace/align_dir{j}"]     = float(m["subspace"]["nfm_alignment"][t][j])
-            row[f"spectrum/rayleigh{j}"]      = float(m["target"]["rayleigh"][t][j])
-            row[f"spectrum/rayleigh_ratio{j}"]= float(m["target"]["rayleigh_ratio"][t][j])
+        # Per index X, one metric at a time so each family's panels stay together.
+        # X is the target direction u_X for rayleigh / align_dir, and the target
+        # AGOP eigenvector v*_X for align_true / rank_true.
+        per_index = (
+            ("spectrum/rayleigh",       m["target"]["rayleigh"],        float),
+            ("spectrum/rayleigh_ratio", m["target"]["rayleigh_ratio"],  float),
+            ("subspace/align_dir",      m["subspace"]["nfm_alignment"], float),
+            ("subspace/align_true",     m["target"]["align_true"],      float),
+            ("subspace/rank_true",      m["target"]["rank_true"],       int),
+        )
+        for key, series, cast in per_index:
+            for j in range(r):
+                row[f"{key}{j}"] = cast(series[t][j])
         wandb.log(row, step=t)
 
     run.summary.update(metrics.run_summary(m, lr))
