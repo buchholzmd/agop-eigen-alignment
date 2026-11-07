@@ -187,7 +187,11 @@ def log_run_to_wandb(out):
         n_params     = d * m + 2 * m + 1,
     )
 
-    run = wandb.init(entity=get_in(cfg, "wandb.entity"), project=get_in(cfg, "wandb.project"),
+    # Under a W&B sweep agent the sweep fixes entity and project, and wandb.init
+    # warns that it ignores both, so pass them only outside a sweep.
+    in_sweep = bool(os.environ.get("WANDB_SWEEP_ID"))
+    run = wandb.init(entity=None if in_sweep else get_in(cfg, "wandb.entity"),
+                     project=None if in_sweep else get_in(cfg, "wandb.project"),
                      name=cfg.get("_wandb_name") or run_name(cfg),
                      group=group_name(cfg),
                      job_type=get_in(cfg, "model.parameterization"),

@@ -61,6 +61,8 @@ wandb:
   tags: []                  # e.g. [fir, gpu] -- filterable in the W&B UI
   notes: ""
   job_type: sweep
+  # What the W&B Sweeps page ranks runs by and fits parameter importance against.
+  sweep_metric: {name: val_loss, goal: minimize}
   # NOTE: no API key here. Secrets do not belong in a committed file.
   #   export WANDB_API_KEY=...   (or run `wandb login` once)
 

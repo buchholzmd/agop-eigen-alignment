@@ -5,8 +5,9 @@ optim:
   lr_mode: absolute
   steps: 1000
 
-# Axes other than lr. The lr axis is handled by the runner's ascending early-exit
-# scan (see scripts/run_sweep.py) so diverged learning rates are never executed.
+# Axes other than lr, which comes from lr_scan below. A W&B sweep runs every
+# (cell, lr) pair; only the local runner (scripts/run_sweep.py) has the
+# ascending early-exit scan that skips lrs past the first diverged ones.
 sweep:
   model.parameterization: [standard, ntk, mup]
   model.width:  [16, 256, 1024, 4096, 16384]
@@ -20,10 +21,10 @@ lr_scan:
   lo: 0.0001
   hi: 0.5
   num: 51
-  stop_after_diverged: 2    # stop a cell after this many consecutive diverged lrs
+  stop_after_diverged: 2    # run_sweep.py only: stop a cell after this many consecutive diverged lrs
 
-# Skip configurations that cannot finish in reasonable time/memory.
-# Checked before any work is done; skipped cells are recorded, not silently dropped.
+# Skip configurations that cannot finish in reasonable time/memory. Checked before
+# any work is done; under a W&B sweep each such trial is closed at once, tagged infeasible.
 limits:
   max_params: 100000000     # d*m
   max_act_bytes: 4000000000 # n*m*4 -- activations are unavoidable and dominate
@@ -32,4 +33,4 @@ limits:
   max_capacity: 1000        # n/d > 1000: saturated, nothing changes
 
 slurm:                      # overrides base.yaml; gpus/account/cpus/mem/time are inherited
-  array: "0-437%16"         # 438 feasible cells = --nchunks 438, one cell per task; <=16 at once
+  array: "0-437%16"         # 438 tasks, one W&B agent each, <=16 at once

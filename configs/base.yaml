@@ -67,6 +67,8 @@ wandb:
   tags: []                  # e.g. [fir, gpu] -- filterable in the W&B UI
   notes: ""
   job_type: sweep
+  # What the W&B Sweeps page ranks runs by and fits parameter importance against.
+  sweep_metric: {name: val_loss, goal: minimize}
   # NOTE: no API key here. Secrets do not belong in a committed file.
   #   export WANDB_API_KEY=...   (or run `wandb login` once)
 
@@ -83,4 +85,4 @@ slurm:                      # read by scripts/submit.sh, passed to sbatch on the
   cpus_per_task: 3
   mem: 70G
   time: "3:00:00"
-  array: "0-63%16"          # 64 tasks, at most 16 concurrent
+  array: "0-63%16"          # 64 tasks (one W&B agent each), at most 16 concurrent

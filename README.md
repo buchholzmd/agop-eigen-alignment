@@ -78,7 +78,7 @@ Run everything from the repository root. `<SWEEP-NAME>.yaml` is a file in `confi
 
 ### From the command line
 
-For quick tests, run the sweep runner directly on a login node. Login nodes have no GPUs, so force JAX onto the CPU:
+For quick tests, run the local sweep runner `scripts/run_sweep.py` directly on a login node. It does not create a W&B Sweep (its runs are plain runs in the project). Login nodes have no GPUs, so force JAX onto the CPU:
 
 ```bash
 source ~/jax_env/bin/activate
@@ -93,29 +93,36 @@ JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES="" python scripts/run_sweep.py --config f
 
 > **Note:** Setting `WANDB_MODE=offline` has no effect in this repo. The W&B mode comes from `wandb.mode` in the config, which is passed directly to `wandb.init` and takes precedence over the environment variable, for command-line runs and SLURM jobs alike. To log offline, set `wandb.mode: offline` in the config and upload the runs later with `wandb sync --sync-all` from the repository root.
 
-A *cell* is one point of the sweep grid with every axis except the learning rate fixed; each cell scans its learning rates in ascending order. `--nchunks N` splits the feasible cells into `N` strided chunks and `--chunk i` runs chunk `i`. `full_sweep.yaml` has 438 feasible cells, so `--nchunks 438` runs exactly one cell. Other flags:
+A *cell* is one point of the sweep grid with every axis except the learning rate fixed; `run_sweep.py` scans each cell's learning rates in ascending order and stops after `lr_scan.stop_after_diverged` consecutive diverged ones. `--nchunks N` splits the feasible cells into `N` strided chunks and `--chunk i` runs chunk `i`. `full_sweep.yaml` has 438 feasible cells, so `--nchunks 438` runs exactly one cell. Other flags:
 
 - `--dry-run` prints the number of feasible cells and lists the cells in the chunk, without running anything.
 - `--outdir DIR` writes results under `DIR` instead of `output/`.
 - `--no-wandb` turns off W&B logging.
 
-Results go to `output/<sweep name>/<cell>/lr=<lr>/done.json`. Finished learning rates and cells are skipped on reruns, including by the SLURM sweep. A test run into `output/` therefore means the sweep will skip that cell, so use `--outdir output/test` for throwaway runs.
+Results go to `output/<sweep name>/<cell>/lr=<lr>/done.json`, and a rerun of `run_sweep.py` skips finished learning rates and cells, so use `--outdir output/test` for throwaway runs.
 
 ### Sweeps with SLURM
 
-Submit a whole sweep as a SLURM array job:
+SLURM sweeps run as a [W&B Sweep](https://docs.coreweave.com/models/sweeps/sweep-config-keys), so W&B "creates a parallel coordinates plot, a parameter importance plot, and a scatter plot when you start a sweep job" ([Visualize sweep results](https://docs.coreweave.com/models/sweeps/visualize-sweep-results)). They rank runs by `wandb.sweep_metric`, which defaults to minimizing `val_loss`. Submit a sweep with
 
 ```bash
-./scripts/submit.sh <SWEEP-NAME>.yaml      # e.g. ./scripts/submit.sh full_sweep.yaml
+./scripts/submit.sh <SWEEP-NAME>.yaml              # e.g. ./scripts/submit.sh full_sweep.yaml
+./scripts/submit.sh <SWEEP-NAME>.yaml <SWEEP-ID>   # more agents on an existing sweep
 ```
 
-`scripts/submit.sh` reads the `slurm:` block of the config and submits `scripts/sweep.sbatch` with those settings. The defaults (account, GPU type, CPUs, memory, time limit, array) live in `configs/base.yaml`, and a sweep config can override any of them. Each array task gets its own GPU (an H100 MIG slice by default) and runs
+`scripts/submit.sh` does two things:
 
-```bash
-python scripts/run_sweep.py --config <SWEEP-NAME>.yaml --chunk $SLURM_ARRAY_TASK_ID --nchunks $SLURM_ARRAY_TASK_COUNT
-```
+1. **Creates the sweep.** `scripts/wandb_sweep.py` turns the config into a W&B grid sweep with one parameter per `sweep:` axis plus `optim.lr` from `lr_scan`, and prints its ID. Run `python scripts/wandb_sweep.py --config <SWEEP-NAME>.yaml --dry-run` to see the sweep config and its trial count without creating anything.
+2. **Starts the agents.** It submits `scripts/sweep.sbatch` with the config's `slurm:` settings. The defaults (account, GPU type, CPUs, memory, time limit, array) live in `configs/base.yaml`, and a sweep config can override any of them. Each array task gets its own GPU (an H100 MIG slice by default) and runs one agent, `wandb agent <entity>/<project>/<SWEEP-ID>`. The agent pulls trials and runs each as `scripts/trial.py` until the grid is exhausted or the time limit ends the task. `slurm.array` is `"0-<N-1>%<K>"`: `N` agents in total, at most `K` at once.
 
-so the array size is the number of chunks. For one cell per task, set `slurm.array` to `"0-<N-1>%<K>"`, where `N` is the feasible-cell count from `--dry-run` and `K` caps how many tasks run at once. `full_sweep.yaml` uses `"0-437%16"`.
+A trial is one (cell, lr) point, and W&B's grid serves every combination:
+
+- **No early exit over learning rates.** Every lr of every cell runs, including those past divergence, so `full_sweep.yaml` is 39,780 trials. Only `run_sweep.py` stops a cell early.
+- **Infeasible cells still get trials.** A trial that fails the `limits:` checks closes at once without training, tagged `infeasible`, with the reason in its `infeasible` summary field. That is 17,442 of `full_sweep.yaml`'s trials; filter them out by the tag.
+- **List-valued axes are swept by index.** `target.terms` appears in the sweep as `target.terms_index`, and the run config still holds the real value under `target.terms`.
+- **Order and retries.** W&B's [open-source grid code](https://github.com/wandb/sweeps/blob/master/src/sweeps/grid_search.py) takes the product over parameter names in sorted order, with the last varying fastest. It counts every run it is given as done, whatever its state, so expect a trial killed by the time limit not to be served again.
+
+To add agents later, for example after tasks hit the time limit, pass the sweep ID that `submit.sh` printed.
 
 > **Don't export the CPU flags before submitting.** `submit.sh` calls `sbatch --export=ALL`, so any variable exported in your shell (for example `export JAX_PLATFORMS=cpu`) is copied into every job and silently runs it on the CPU. The inline `VAR=value command` form used above is not exported, so it is safe.
 
@@ -123,7 +130,7 @@ Monitor and manage the jobs:
 
 ```bash
 squeue -u $USER                                                # TRES_PER_N shows the GPU type; N/A means no GPU
-grep -E '^jax|FAILED' output/slurm/agop-sweep-<jobid>_0.out   # should show CudaDevice and no FAILED lines
+grep -E '^jax|Traceback' output/slurm/agop-sweep-<jobid>_0.out   # should show CudaDevice and no Traceback
 sacct -j <jobid> -X --format=JobID,State,Elapsed               # find tasks that hit TIMEOUT
 scancel <jobid>                                                # cancel the whole array
 ```
@@ -305,6 +312,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 - **`sharpness_ratio_max`**: the maximum of `geometry/sharpness_ratio` over training.
 - **`eos_first_step`**: the first step with `sharpness_ratio` ≥ 1, or −1 if the run never reaches EOS.
 - **`eos_fraction`**: the fraction of steps with `sharpness_ratio` ≥ 1.
+- **`infeasible`**: on W&B sweep trials tagged `infeasible` only, the `limits:` check the cell failed. These runs have no other metrics.
 - **`final_<metric>`**: the last-step value of `subspace/{nfm,agop}_{mean_alignment,subspace_dist_sq}`, `subspace/mean_align_true` and `nfa/{agop_cosine,nuclear_ratio,intrinsic_dim_ratio,stable_rank_ratio}`.
 
 ### Aggregate run

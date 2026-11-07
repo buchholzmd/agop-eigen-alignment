@@ -1,6 +1,82 @@
-"""Grid expansion, feasibility filtering and the lr early-exit scan."""
+"""Grid expansion, feasibility filtering, the lr early-exit scan, and W&B sweeps."""
+import copy
 import json
 import math
+
+from config import get_in, set_in
+
+# W&B sweep values must be scalars, so an axis whose values are not (target.terms
+# is a list of dicts) is swept by INDEX, under its own name so the index never
+# overwrites the real value that the run config logs under the axis name.
+INDEX_SUFFIX = "_index"
+
+
+def _is_scalar(v):
+    return v is None or isinstance(v, (bool, int, float, str))
+
+
+def wandb_sweep_config(cfg, config_name):
+    """W&B grid-sweep config for `cfg`: one parameter per `sweep` axis, plus optim.lr.
+
+    The lr values are the config's lr_scan grid, or its `sweep.optim.lr` list when it
+    sweeps lr directly. W&B's grid has no early exit and no constraints, so it serves
+    every combination, feasible or not; scripts/trial.py closes infeasible ones at once.
+    """
+    axes = dict(cfg.get("sweep") or {})
+    lrs = axes.pop("optim.lr", None)
+    if lrs is None:
+        lrs = lr_grid(cfg)
+    if not isinstance(lrs, list):
+        raise ValueError(f"{config_name}: sweep.optim.lr must be a list, got {lrs!r}")
+
+    params = {}
+    for key, values in axes.items():
+        if all(_is_scalar(v) for v in values):
+            params[key] = {"values": list(values)}
+        else:
+            params[key + INDEX_SUFFIX] = {"values": list(range(len(values)))}
+    params["optim.lr"] = {"values": [float(v) for v in lrs]}
+
+    return {
+        "name": cfg.get("name", "sweep"),
+        "method": "grid",
+        "metric": dict(get_in(cfg, "wandb.sweep_metric")),
+        "program": "scripts/trial.py",
+        "command": ["${env}", "${interpreter}", "${program}",
+                    "--config", config_name, "--params", "${args_json_file}"],
+        "parameters": params,
+    }
+
+
+def grid_size(sweep_config):
+    return math.prod(len(p["values"]) for p in sweep_config["parameters"].values())
+
+
+def trial_config(base, params):
+    """The inverse of wandb_sweep_config: the full config for one (cell, lr) trial.
+
+    params is the flat {parameter: value} dict W&B hands the trial. Values are looked
+    up in the config's own lists, so each keeps its YAML type rather than whatever
+    the JSON round-trip made of it.
+    """
+    cfg = copy.deepcopy(base)
+    sweep = cfg.pop("sweep", None) or {}
+    axes, index = {}, {}
+    for key, values in sweep.items():
+        if key == "optim.lr":
+            continue
+        if key in params:
+            i = values.index(params[key])
+        elif key + INDEX_SUFFIX in params:
+            i = int(params[key + INDEX_SUFFIX])
+        else:
+            raise KeyError(f"no sweep parameter for axis {key!r}; was the config "
+                           f"edited after the sweep was created?")
+        set_in(cfg, key, copy.deepcopy(values[i]))
+        axes[key], index[key] = values[i], i
+    set_in(cfg, "optim.lr", float(params["optim.lr"]))
+    cfg["_sweep_axes"], cfg["_sweep_index"] = axes, index
+    return expand_dr(cfg)
 
 
 def expand_dr(cfg):

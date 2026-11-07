@@ -10,7 +10,6 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 # WANDB_API_KEY comes from the environment (`wandb login` or a secret), never from the config.
 
 cd "$SLURM_SUBMIT_DIR"
-python scripts/run_sweep.py \
-    --config "${SWEEP_CONFIG:-full_sweep.yaml}" \
-    --chunk "${SLURM_ARRAY_TASK_ID:-0}" \
-    --nchunks "${SLURM_ARRAY_TASK_COUNT:-1}"
+# One W&B agent per array task. It pulls (cell, lr) trials from the sweep and runs each
+# as scripts/trial.py, until the grid is exhausted or the time limit ends the task.
+wandb agent "${SWEEP_PATH:?SWEEP_PATH is set by scripts/submit.sh}"
