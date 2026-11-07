@@ -247,10 +247,10 @@ def log_run_to_wandb(out):
             "subspace/nfm_mean_alignment":   float(m["subspace"]["nfm_mean_alignment"][t]),
             "subspace/nfm_cos_max":          float(m["subspace"]["nfm_cos_max"][t]),
             "subspace/nfm_sin_max":          float(m["subspace"]["nfm_sin_max"][t]),
-            "subspace/nfm_subspace_dist":    float(m["subspace"]["nfm_subspace_dist"][t]),
+            "subspace/nfm_subspace_dist_sq": float(m["subspace"]["nfm_subspace_dist_sq"][t]),
             "subspace/agop_mean_alignment":  float(m["subspace"]["agop_mean_alignment"][t]),
             "subspace/agop_sin_max":         float(m["subspace"]["agop_sin_max"][t]),
-            "subspace/agop_subspace_dist":   float(m["subspace"]["agop_subspace_dist"][t]),
+            "subspace/agop_subspace_dist_sq": float(m["subspace"]["agop_subspace_dist_sq"][t]),
             "subspace/mean_matched_alignment": float(m["nfa_eigen_alignment"]["score"][t]),
             "subspace/mean_align_true":        float(m["target"]["mean_align_true"][t]),
         }

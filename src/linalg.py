@@ -194,9 +194,9 @@ def subspace_angles(A, B):
     sines   = jnp.sqrt(jnp.clip(1.0 - cosines ** 2, 0.0))
 
     return {
-        "alignment":      alignment,
-        "mean_alignment": alignment.mean(),
-        "cos_max":        cosines[0],
-        "sin_max":        sines[-1],
-        "subspace_dist":  jnp.linalg.norm(sines), # = r * (1 - mean_alignment) for k <= r
+        "alignment":         alignment,
+        "mean_alignment":    alignment.mean(),
+        "cos_max":           cosines[0],
+        "sin_max":           sines[-1],
+        "subspace_dist_sq":  jnp.linalg.norm(sines) ** 2, # = r * (1 - mean_alignment) for k <= r
     }

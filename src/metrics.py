@@ -331,8 +331,8 @@ def run_summary(metrics, lr):
         "eos_first_step":      int(crossed[0]) if crossed.size else -1,
         "eos_fraction":        float((sharp >= 1.0).mean()),
     }
-    for group, keys in (("subspace", ("nfm_mean_alignment", "nfm_subspace_dist",
-                                      "agop_mean_alignment", "agop_subspace_dist")),
+    for group, keys in (("subspace", ("nfm_mean_alignment", "nfm_subspace_dist_sq",
+                                      "agop_mean_alignment", "agop_subspace_dist_sq")),
                         ("target",   ("agop_cosine", "mean_align_true", "nuclear_ratio",
                                       "intrinsic_dim_ratio", "stable_rank_ratio"))):
         for key in keys:

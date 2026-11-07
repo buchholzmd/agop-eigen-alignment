@@ -175,7 +175,7 @@ if __name__ == "__main__":
 # (x config key, y summary key, reduction over the lr grid, axis label)
 SCALING_FITS = [
     ("model.width", "loss_min",                 "min", "best loss"),
-    ("model.width", "final_nfm_subspace_dist",  "min", "best subspace distance"),
+    ("model.width", "final_nfm_subspace_dist_sq", "min", "best squared subspace distance"),
     ("model.width", "final_nuclear_ratio",      "max", "AGOP nuclear / target"),
 ]
 
