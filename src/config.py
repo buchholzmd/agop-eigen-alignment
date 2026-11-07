@@ -94,7 +94,7 @@ def flatten(cfg, prefix=""):
 # config should hold exactly what distinguishes one run from another -- not the
 # SLURM account, the cache path, or the sweep definition that generated it.
 INFRA_KEYS = ("slurm", "paths", "wandb", "limits", "lr_scan", "sweep",
-              "_sweep_axes", "_wandb_name")
+              "_sweep_axes", "_sweep_index", "_wandb_name")
 
 
 def run_config(cfg):
