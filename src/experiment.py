@@ -17,69 +17,41 @@ from networks import MLP
 from opt import TrainState, gd_update, train
 from ntk import nvp
 from hess import _hvp_flat
-from linalg import mvp_power_iteration
+from linalg import matrix_cosine, mvp_power_iteration, nuclear
 from poly import poly
-from multi_index import generate_multi_index_data
+from multi_index import gaussian_egop, generate_multi_index_data, multi_index_set
 from agop import agop
 import metrics
 from config import get_in, run_config, run_name, group_name, run_tags
 
 def build_data(cfg, rng):
-    '''-> X, y, U, target_fn, G_star.  Sources: multi-index.ipynb cell 4.'''
+    '''-> X, y, X_val, y_val, U, target_fn, G_star, G_egop.  Sources: multi-index.ipynb cell 4.'''
     n, d, r = get_in(cfg, "data.n"), get_in(cfg, "data.d"), get_in(cfg, "data.r")
     X = jr.normal(rng.next(), (n, d))
 
-    # Coefficients are built from target.alpha, not listed: c_k ~ k^-alpha over all
-    # r directions, then normalized so ||c||_2 = 1 and E[f*^2] = 1 exactly at every r.
-    # alpha = 0 IS the constant-coefficient target, so one parameter covers both
-    # families and alpha is sweepable. Orders are a pattern, cycled to r.
-    alpha_decay = float(get_in(cfg, "target.alpha"))
-    coeffs = jnp.arange(1, r + 1, dtype=jnp.float32) ** -alpha_decay
-    coeffs = coeffs / jnp.linalg.norm(coeffs)
+    # The multi-index set and coefficients from target.terms and target.alpha; see
+    # multi_index_set for the term syntax.
+    beta, coeffs = multi_index_set(get_in(cfg, "target.terms"), r, get_in(cfg, "target.alpha"))
+    basis, normalize = get_in(cfg, "target.basis"), get_in(cfg, "target.normalize")
 
-    # target.terms builds the multi-index set Lambda = {alpha^(m)} that poly takes.
-    # A term maps a RELATIVE direction offset to a Hermite degree. Two forms:
-    #
-    #   flat   [{0: 2}]                  broadcast: EVERY direction k gets h_2(z_k)
-    #          [{0: 1}, {0: 2}]          Ben Arous, h_1(z_k) + h_2(z_k) for every k
-    #          [{0: 2}, {0: 1, 1: 1}]    h_2(z_k) + h_1(z_k) h_1(z_{k+1}), interacting
-    #
-    #   nested [[{0: 4}], [{0: 3}], [{0: 2}]]
-    #                                    cycled: direction k gets group k mod n_groups,
-    #                                    i.e. Lambda = {4e_1, 3e_2, 2e_3, 4e_4, ...}
-    #
-    # Both are r-independent, so an r sweep regenerates Lambda consistently.
-    # Each term carries 1/sqrt(terms in its group) so every direction's link has
-    # unit L2 norm and ||c||_2 = 1 still gives E[f*^2] = 1.
-    terms = get_in(cfg, "target.terms")
-    groups = terms if isinstance(terms[0], list) else [terms]
-
-    rows, weights = [], []
-    for k in range(r):
-        group = groups[k % len(groups)]
-        for term in group:
-            row = np.zeros(r, dtype=np.int32)
-            for offset, degree in term.items():
-                row[(k + int(offset)) % r] = int(degree)
-            rows.append(row)
-            weights.append(coeffs[k] / np.sqrt(len(group)))
-    alpha  = jnp.asarray(np.stack(rows), dtype=jnp.int32)
-    coeffs = jnp.asarray(np.asarray(weights, dtype=np.float32))
-
-    g = lambda z: poly(alpha, coeffs, z,
-                       basis=get_in(cfg, "target.basis"),
-                       normalize=get_in(cfg, "target.normalize"))
+    g = lambda z: poly(beta, coeffs, z, basis=basis, normalize=normalize)
 
     X_val = jr.normal(RNGKey(get_in(cfg, "data.val_seed")).next(),
                       (get_in(cfg, "data.val_n"), d))
 
-    target_fn, U, y = generate_multi_index_data(
+    target_fn, U, y, scale = generate_multi_index_data(
         g, r=r, X=X, rng=rng,
         noise=get_in(cfg, "data.noise"),
         normalize=get_in(cfg, "data.normalize"),
+        return_scale=True,
     )
     y_val = jax.vmap(target_fn)(X_val)      # noiseless: val_loss -> 0 iff f is recovered
-    return X, y, X_val, y_val, U, target_fn, agop(target_fn, X)
+
+    # G_star is the target's AGOP on the training inputs; G_egop is its population
+    # EGOP E_x[grad f* grad f*^T], x ~ N(0, I_d), in closed form: grad f*(x) =
+    # U^T grad g(Ux) / scale with Ux ~ N(0, I_r). Both are supported on span(U^T).
+    G_egop = gaussian_egop(U, beta, coeffs, basis=basis, normalize=normalize, scale=scale)
+    return X, y, X_val, y_val, U, target_fn, agop(target_fn, X), G_egop
 
 def build_model(cfg, rng):
     '''-> model, state, params0.  Sources: cells 7, 8, 9.'''
@@ -108,7 +80,8 @@ def critical_lr(state, model, X, y, loss_fn, rng, iters=30):
     return float(ntk_lambda0), float(hess_lambda0), 2.0 / float(hess_lambda0)
 
 def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
-                        U=None, target_agop=None, target_eigvals=None, target_eigvecs=None):
+                        U=None, target_agop=None, target_eigvals=None, target_eigvecs=None,
+                        target_egop=None, egop_eigvals=None, egop_eigvecs=None):
     '''Verbatim from multi-index.ipynb cell 34, wrapped so each run builds its own.'''
     r = get_in(cfg, 'data.r')
     num_power_iters = get_in(cfg, 'metrics.num_power_iters')
@@ -130,6 +103,10 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
         metrics_config["target"]   = {"fn": metrics.target_alignment,
                                       "args": (target_agop, target_eigvals, target_eigvecs, U.T)}
         metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U.T,)}
+    if target_egop is not None:
+        metrics_config["egop"] = {"fn": metrics.egop_alignment,
+                                  "args": (target_egop, egop_eigvals, egop_eigvecs,
+                                           50*num_power_iters, rng)}
     return metrics_config
 
 def run_one(cfg, log_wandb=None, run=None):
@@ -138,7 +115,7 @@ def run_one(cfg, log_wandb=None, run=None):
     run: a W&B run that already exists (a sweep point's); the results are logged to it.
     '''
     rng = RNGKey(get_in(cfg, "data.seed"))
-    X, y, X_val, y_val, U, target_fn, G_star = build_data(cfg, rng)
+    X, y, X_val, y_val, U, target_fn, G_star, G_egop = build_data(cfg, rng)
     model, state, params0 = build_model(cfg, rng)
     loss_fn = lambda outputs, targets: 2 * l2_loss(outputs, targets)
 
@@ -151,15 +128,19 @@ def run_one(cfg, log_wandb=None, run=None):
     target_eigvals, target_eigvecs = jnp.linalg.eigh(G_star)
     target_eigvals = target_eigvals[::-1][:r]
     target_eigvecs = target_eigvecs[:, ::-1][:, :r]
+    egop_eigvals, egop_eigvecs = jnp.linalg.eigh(G_egop)
+    egop_eigvals = egop_eigvals[::-1][:r]
+    egop_eigvecs = egop_eigvecs[:, ::-1][:, :r]
 
     mc = make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=X_val, y_val=y_val,
                              U=U, target_agop=G_star,
-                             target_eigvals=target_eigvals, target_eigvecs=target_eigvecs)
+                             target_eigvals=target_eigvals, target_eigvecs=target_eigvecs,
+                             target_egop=G_egop, egop_eigvals=egop_eigvals, egop_eigvecs=egop_eigvecs)
     state, traj, metrics = train(state, loss_fn, X, y,
                                  lr=lr, steps=get_in(cfg, "optim.steps"),
                                  metrics_config=mc)
 
-    out = dict(cfg=cfg, X=X, y=y, U=U, G_star=G_star, target_fn=target_fn,
+    out = dict(cfg=cfg, X=X, y=y, U=U, G_star=G_star, G_egop=G_egop, target_fn=target_fn,
                target_eigvals=target_eigvals, metrics=metrics, traj=traj,
                state=state, model=model, lr=lr, eta_crit=eta_crit,
                ntk_lambda0=ntk_lambda0, hess_lambda0=hess_lambda0, r=r)
@@ -188,6 +169,10 @@ def log_run_to_wandb(out, run=None):
         capacity     = n / d,          # samples per ambient dimension
         n_over_r2    = n / r ** 2,     # samples against the target AGOP floor
         n_params     = d * m + 2 * m + 1,
+        # How far the target's AGOP on the n training inputs is from its population
+        # EGOP: fixed per run, so config rather than a logged series.
+        target_agop_egop_cosine        = float(matrix_cosine(out["G_star"], out["G_egop"])),
+        target_agop_egop_nuclear_ratio = float(nuclear(out["G_star"]) / nuclear(out["G_egop"])),
     )
 
     if run is None:
@@ -236,9 +221,11 @@ def log_run_to_wandb(out, run=None):
 
             # The NFM M against the AGOPs. nfa_cosine = cos(M, G) is the literal
             # Neural Feature Ansatz; the rest test it by eigenvectors, eigenspaces
-            # and spectra, and nfm_cosine compares M with the target AGOP G*.
+            # and spectra; nfm_cosine and nfm_egop_cosine compare M with the target's
+            # AGOP G* on the training inputs and with its population EGOP.
             "nfa/nfa_cosine":                float(m["nfa_correlation"]["matrix_correlation"][t]),
             "nfa/nfm_cosine":                float(m["target"]["nfm_cosine"][t]),
+            "nfa/nfm_egop_cosine":           float(m["egop"]["nfm_egop_cosine"][t]),
             "nfa/mean_matched_alignment":    float(m["nfa_eigen_alignment"]["score"][t]),
             "nfa/nfm_agop_mean_alignment":   float(m["nfa_eigen_alignment"]["nfm_agop_mean_alignment"][t]),
             "nfa/nfm_agop_cos_max":          float(m["nfa_eigen_alignment"]["nfm_agop_cos_max"][t]),
@@ -246,10 +233,13 @@ def log_run_to_wandb(out, run=None):
             "nfa/nfm_agop_subspace_dist_sq": float(m["nfa_eigen_alignment"]["nfm_agop_subspace_dist_sq"][t]),
             "nfa/wasserstein1_nfm_agop":     float(m["target"]["wasserstein1_nfm_agop"][t]),
 
-            # The learned AGOP G alone and against the target AGOP G*
-            # (rayleighX / rayleigh_ratioX / align_trueX / rank_trueX are added below).
+            # The learned AGOP G alone, against the target's AGOP G* on the training
+            # inputs, and (egop in the name) against the target's population EGOP
+            # (rayleighX, rayleigh_ratioX, align_trueX, rank_trueX, align_egopX and
+            # rank_egopX are added below).
             "agop/agop_nuclear":  float(m["target"]["agop_nuclear"][t]),
             "agop/nuclear_ratio": float(m["target"]["nuclear_ratio"][t]),
+            "agop/egop_nuclear_ratio": float(m["egop"]["egop_nuclear_ratio"][t]),
             "agop/agop_stable_rank":         float(m["target"]["agop_stable_rank"][t]),
             "agop/agop_intrinsic_dim":       float(m["target"]["agop_intrinsic_dim"][t]),
             "agop/agop_participation_ratio": float(m["target"]["agop_participation_ratio"][t]),
@@ -258,7 +248,11 @@ def log_run_to_wandb(out, run=None):
             "agop/participation_ratio_ratio": float(m["target"]["participation_ratio_ratio"][t]),
             "agop/wasserstein1_agop_target":  float(m["target"]["wasserstein1_agop_target"][t]),
             "agop/agop_cosine":               float(m["target"]["agop_cosine"][t]),
+            "agop/agop_egop_cosine":          float(m["egop"]["agop_egop_cosine"][t]),
+            "agop/agop_egop_frobenius_dist":  float(m["egop"]["agop_egop_frobenius_dist"][t]),
+            "agop/agop_egop_spectral_dist":   float(m["egop"]["agop_egop_spectral_dist"][t]),
             "agop/mean_align_true":           float(m["target"]["mean_align_true"][t]),
+            "agop/mean_align_egop":           float(m["egop"]["mean_align_egop"][t]),
 
             # Top-r eigenspaces of M and G against span(U) (align_dirX is added below).
             "subspace/nfm_mean_alignment":   float(m["subspace"]["nfm_mean_alignment"][t]),
@@ -271,14 +265,17 @@ def log_run_to_wandb(out, run=None):
         }
         # Per index X, one metric at a time so each family's panels stay together.
         # X is the target direction u_X for rayleigh / align_dir, the target AGOP
-        # eigenvector v*_X for align_true / rank_true, and the learned AGOP
-        # eigenvector v_X for nfm_agop_align_dir.
+        # eigenvector v*_X for align_true / rank_true, the target EGOP's eigenvector
+        # for align_egop / rank_egop, and the learned AGOP eigenvector v_X for
+        # nfm_agop_align_dir.
         per_index = (
             ("nfa/nfm_agop_align_dir",  m["nfa_eigen_alignment"]["nfm_agop_alignment"], float),
             ("agop/rayleigh",           m["target"]["rayleigh"],        float),
             ("agop/rayleigh_ratio",     m["target"]["rayleigh_ratio"],  float),
             ("agop/align_true",         m["target"]["align_true"],      float),
             ("agop/rank_true",          m["target"]["rank_true"],       int),
+            ("agop/align_egop",         m["egop"]["align_egop"],        float),
+            ("agop/rank_egop",          m["egop"]["rank_egop"],         int),
             ("subspace/align_dir",      m["subspace"]["nfm_alignment"], float),
         )
         for key, series, cast in per_index:

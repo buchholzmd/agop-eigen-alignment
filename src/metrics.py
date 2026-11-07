@@ -21,8 +21,8 @@ from nn_utils import get_activations, nn_agop, sparsity, _cov_mvp
 from ntk import nvp
 from hess import _hvp_flat
 from linalg import (align_bases, matrix_cosine, mvp_orthogonal_iteration, mvp_power_iteration,
-                    intrinsic_dim, stable_rank, subspace_angles, wasserstein_1d,
-                    nuclear)
+                    hutchinson_trace_estimate, intrinsic_dim, stable_rank, subspace_angles,
+                    wasserstein_1d, nuclear)
 
 def agop(state, model, X, layers=(0,), **kwargs):
     return nn_agop(state.params, model, X,
@@ -177,10 +177,25 @@ def hessian_eigs(state, loss_fn, X, y, num_power_iters, rng, **kwargs):
         )
     return {"max_eigvals": eigval, "max_eigvecs": eigvec}
 
+def matched_alignment(learned_eigvecs, reference_eigvecs):
+    """Hungarian-matched eigenvector overlaps, keyed by the REFERENCE eigenvector X.
+
+    -> (mean, align, rank): align[X] = <v_rank[X], ref_X>^2 and rank[X] = the learned
+    eigenvector matched to reference eigenvector X. align_bases keys perm by the
+    LEARNED eigenvector (perm[i] = reference matched to learned i); inverting it keys
+    both series by the reference, so a series never changes meaning when the
+    matching does.
+    """
+    alignment = align_bases(learned_eigvecs, reference_eigvecs)
+    rank  = jnp.argsort(alignment["perm"])
+    align = alignment["overlap_matrix"][rank, jnp.arange(rank.shape[0])]
+    return alignment["score"], align, rank
+
 def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_dirs, **kwargs):
     """Learned AGOP and NFM referenced to the target AGOP, which does not move.
 
     target_dirs : (d, r) the target directions as COLUMNS, i.e. U.T.
+    target_agop : the target's AGOP on the training inputs.
 
     target_agop / target_eigvals / target_eigvecs are computed once per run in
     run_one, not per step: the target is fixed, so re-decomposing it every step
@@ -194,24 +209,17 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
     agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
     nfm_eigvals  = kwargs["nfm_eigs"]["eigvals"]
 
-    alignment      = align_bases(agop_eigvecs, target_eigvecs)
     rayleigh       = jnp.einsum("dj,de,ej->j", target_dirs, learned_agop, target_dirs)
     agop_nuclear   = nuclear(learned_agop)
     target_nuclear = nuclear(target_agop)
     agop_rank      = rank_stats(kwargs["agop_eigs"]["spectrum"])
     target_rank    = rank_stats(target_eigvals)
-
-    # align_bases keys perm by the LEARNED eigenvector (perm[i] = target matched
-    # to learned i). Inverting it keys both series below by the TARGET
-    # eigenvector X, so a series never changes meaning when the matching does:
-    # rank_true[X] = learned eigenvector matched to target eigenvector X.
-    rank_true  = jnp.argsort(alignment["perm"])
-    align_true = alignment["overlap_matrix"][rank_true, jnp.arange(rank_true.shape[0])]
+    mean_align_true, align_true, rank_true = matched_alignment(agop_eigvecs, target_eigvecs)
 
     return {
         "agop_cosine":     matrix_cosine(learned_agop, target_agop),
         "nfm_cosine":      matrix_cosine(learned_nfm, target_agop),
-        "mean_align_true": alignment["score"],
+        "mean_align_true": mean_align_true,
         "align_true":      align_true,
         "rank_true":       rank_true,
         "agop_nuclear":    agop_nuclear,
@@ -224,6 +232,54 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
         **{f"agop_{name}": value for name, value in agop_rank.items()},
         **{f"{name}_ratio": value / (target_rank[name] + 1e-12)
            for name, value in agop_rank.items()},
+    }
+
+def egop_alignment(state, target_egop, egop_eigvals, egop_eigvecs, num_power_iters, rng,
+                   dense_max=2048, **kwargs):
+    """Learned AGOP and NFM against the target's population EGOP, which does not move.
+
+    target_egop : (d, d) the target's EGOP, from multi_index.gaussian_egop.
+    egop_eigvals / egop_eigvecs : its top r eigenpairs, computed once per run in run_one.
+
+    The distances are relative, ||C|| / ||EGOP|| with C = G - EGOP, a d x d matrix.
+    As in rank_stats, d <= dense_max reads both norms exactly off one eigvalsh(C):
+    ||C||_F = ||lambda||_2 and ||C||_2 = max |lambda|. Above dense_max they are
+    matrix-free, from the PSD operator C^T C = C^2 (C is symmetric) as in stable_rank:
+    ||C||_F^2 = Tr(C^T C) is a Hutchinson estimate and ||C||_2^2 = lambda_max(C^T C) a
+    power iteration, num_power_iters each. Power iteration on C itself returns a
+    Rayleigh quotient, which stalls when C has eigenvalues of both signs and similar
+    size; on C^2 it cannot. The EGOP has rank <= r, so its own norms are exact from
+    its r eigenvalues.
+
+    The top-r eigenspace of the EGOP is span(U) (it is U^T Gamma U), so eigenspace-level
+    alignment to it is subspace_recovery's agop_ entries; only the eigenvector-level
+    matching is computed here.
+
+    Needs "agop", "nfm" and "agop_eigs" above it in metrics_config.
+    """
+    learned_agop = kwargs["agop"]["layer1_agop"]
+    learned_nfm  = kwargs["nfm"]
+    mean_align, align, rank = matched_alignment(kwargs["agop_eigs"]["eigvecs"], egop_eigvecs)
+
+    dim = learned_agop.shape[0]
+    if dim <= dense_max:
+        lam = jnp.linalg.eigvalsh(learned_agop - target_egop)
+        frobenius, spectral = jnp.linalg.norm(lam), jnp.abs(lam).max()
+    else:
+        C   = lambda v: learned_agop @ v - target_egop @ v
+        CtC = lambda v: C(C(v))
+        frobenius = jnp.sqrt(hutchinson_trace_estimate(CtC, dim, num_power_iters, rng))
+        spectral  = jnp.sqrt(mvp_power_iteration(CtC, dim, num_power_iters, rng)[0])
+
+    return {
+        "agop_egop_cosine":         matrix_cosine(learned_agop, target_egop),
+        "nfm_egop_cosine":          matrix_cosine(learned_nfm, target_egop),
+        "egop_nuclear_ratio":       nuclear(learned_agop) / (nuclear(target_egop) + 1e-12),
+        "agop_egop_frobenius_dist": frobenius / (jnp.linalg.norm(egop_eigvals) + 1e-12),
+        "agop_egop_spectral_dist":  spectral / (egop_eigvals[0] + 1e-12),
+        "mean_align_egop":          mean_align,
+        "align_egop":               align,
+        "rank_egop":                rank,
     }
 
 def subspace_recovery(state, target_dirs, **kwargs):
