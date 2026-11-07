@@ -22,9 +22,9 @@ __Contents__:
 
 One paragraph motivating the project. This can be, for example, the paper abstract.
 
-**Notation.** $f$ is the network and $f^*(x)=g(Ux)$ the target, with $u_X$ the X-th row of $U\in\mathbb{R}^{r\times d}$ (see [Specifying the target](#specifying-the-target)). $G=\frac1n\sum_i\nabla f(x_i)\nabla f(x_i)^\top$ is the network's learned AGOP and $G^*$ the target's, both $d\times d$ on the training inputs. $M=W^\top W$ is the NFM of the first-layer weights $W\in\mathbb{R}^{m\times d}$. $v_X$, $v^*_X$, $m_X$ are the eigenvectors of $G$, $G^*$, $M$ with the X-th largest eigenvalue ($\lambda_X$, $\lambda^*_X$), and $Q_G,Q_M\in\mathbb{R}^{d\times r}$ hold the top $r$ eigenvectors of $G$ and $M$ as columns. $H$ is the training-loss Hessian, and $\eta$ is the absolute learning rate (`lr_absolute` in the run config).
+**Notation.** $f$ is the network and $f^{\ast}(x)=g(Ux)$ the target, with $u_X$ the X-th row of $U\in\mathbb{R}^{r\times d}$ (see [Specifying the target](#specifying-the-target)). $G=\frac1n\sum_i\nabla f(x_i)\nabla f(x_i)^\top$ is the network's learned AGOP and $G^{\ast}$ the target's, both $d\times d$ on the training inputs. $M=W^\top W$ is the NFM of the first-layer weights $W\in\mathbb{R}^{m\times d}$. $v_X$, $v_X^{\ast}$, $m_X$ are the eigenvectors of $G$, $G^{\ast}$, $M$ with the X-th largest eigenvalue ($\lambda_X$, $\lambda_X^{\ast}$), and $Q_G,Q_M\in\mathbb{R}^{d\times r}$ hold the top $r$ eigenvectors of $G$ and $M$ as columns. $H$ is the training-loss Hessian, and $\eta$ is the absolute learning rate (`lr_absolute` in the run config).
 
-The loss responds to the square. This is my own derivation, not from the literature. Suppose the network has the right linear link $g(z)=a^\top z$ but the wrong subspace. Then the excess loss is $\mathbb{E}[(a^\top U(I-P_Q)x)^2]=\|(I-P_Q)U^\top a\|^2$, which is quadratic in the subspace error, and the same holds to leading order for smooth links. So if loss $\propto$ dist², fitting the unsquared distance gives half the loss exponent. aggregate.py fits both loss_min and final_nfm_subspace_dist against width, so that's where the choice shows up.
+The loss responds to the square. This is my own derivation, not from the literature. Suppose the network has the right linear link $g(z)=a^\top z$ but the wrong subspace. Then the excess loss is $\mathbb{E}[(a^\top U(I-P_Q)x)^2]=\Vert(I-P_Q)U^\top a\Vert^2$, which is quadratic in the subspace error, and the same holds to leading order for smooth links. So if loss $\propto$ dist², fitting the unsquared distance gives half the loss exponent. aggregate.py fits both loss_min and final_nfm_subspace_dist against width, so that's where the choice shows up.
 
 ## Dependencies
 
@@ -130,13 +130,13 @@ Each task logs to `output/slurm/agop-sweep-<jobid>_<task>.out`. To keep going af
 
 ## Specifying the target
 
-The target is a multi-index model $f^*(x) = g(Ux)$ with $U \in \mathbb{R}^{r \times d}$ orthonormal
+The target is a multi-index model $f^{\ast}(x) = g(Ux)$ with $U \in \mathbb{R}^{r \times d}$ orthonormal
 rows, and $g$ a general multivariate polynomial in the orthonormal Hermite basis
 $h_k = He_k/\sqrt{k!}$:
 
-$$g(z) \;=\; \sum_{m} c_m \prod_{j=1}^{r} h_{\alpha^{(m)}_j}(z_j), \qquad \alpha^{(m)} \in \mathbb{N}_0^{\,r}$$
+$$g(z) = \sum_{m} c_m \prod_{j=1}^{r} h_{\alpha^{(m)}_j}(z_j), \qquad \alpha^{(m)} \in \mathbb{N}_0^{r}$$
 
-`src/poly.py` evaluates this for any multi-index set $\Lambda = \{\alpha^{(m)}\}$. Because `data.r` is a sweep axis and the matrix form of $\Lambda$ would therefore change. `target.terms` gives a **rule** that regenerates $\Lambda$ for whatever `r` is. The rule is applied in `build_data` of [src/experiment.py](src/experiment.py).
+`src/poly.py` evaluates this for any multi-index set $\Lambda = \lbrace\alpha^{(m)}\rbrace$. Because `data.r` is a sweep axis and the matrix form of $\Lambda$ would therefore change. `target.terms` gives a **rule** that regenerates $\Lambda$ for whatever `r` is. The rule is applied in `build_data` of [src/experiment.py](src/experiment.py).
 
 ### Configuring degree by term and coordinate 
 
@@ -144,14 +144,14 @@ A **term** maps a *relative* direction offset to a Hermite degree. Three constru
 
 | construct | meaning |
 |---|---|
-| `{0: 3, 1: 2}` | one term, a **product**: $h_3(z_k)\,h_2(z_{k+1})$ |
+| `{0: 3, 1: 2}` | one term, a **product**: $h_3(z_k)h_2(z_{k+1})$ |
 | `{0: 3}, {0: 2}` as siblings | two terms, a **sum**: $h_3(z_k) + h_2(z_k)$ |
 | flat list `[A, B]` | **broadcast**: every direction gets $A + B$ |
 | nested list `[[A], [B]]` | **cycle**: direction $k$ gets group $k \bmod n_{\text{groups}}$ |
 
 Offsets wrap, so a term with a nonzero offset couples direction $r-1$ back to $0$.
-Coefficients are $c_k \propto k^{-\texttt{target.alpha}}$ normalized to $\|c\|_2 = 1$, with each
-group additionally divided by $\sqrt{|\text{group}|}$, so $\mathbb{E}[f^{*2}] = 1$ exactly at every
+Coefficients are $c_k \propto k^{-\texttt{target.alpha}}$ normalized to $\Vert c\Vert_2 = 1$, with each
+group additionally divided by $\sqrt{|\text{group}|}$, so $\mathbb{E}[f^{\ast 2}] = 1$ exactly at every
 `r`. `target.alpha = 0` gives constant coefficients.
 
 ### Examples (shown at $r = 4$)
@@ -163,8 +163,10 @@ $$g(z) = c_0 h_2(z_0) + c_1 h_2(z_1) + c_2 h_2(z_2) + c_3 h_2(z_3)$$
 **`terms: [[{0: 4}], [{0: 3}], [{0: 2}]]`** — degrees **differ by direction**, cycling
 with period 3:
 
-$$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1) + c_2 h_2(z_2) + c_3 h_4(z_3)
-\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&0&0\\0&0&2&0\\0&0&0&4\end{pmatrix}$$
+```math
+g(z) = c_0 h_4(z_0) + c_1 h_3(z_1) + c_2 h_2(z_2) + c_3 h_4(z_3)
+\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&0&0\\0&0&2&0\\0&0&0&4\end{pmatrix}
+```
 
 **`terms: [[{0: 4}], [{0: 3}, {0: 2}]]`** — odd directions get a *sum* of two degrees on the same coordinate:
 
@@ -174,12 +176,14 @@ $$g(z) = c_0 h_4(z_0) + \tfrac{c_1}{\sqrt2}\big[h_3(z_1) + h_2(z_1)\big]
 **`terms: [[{0: 4}], [{0: 3, 1: 2}]]`** — group 1 is a **single term with two offsets**, a
 *product* across two directions with a wraparound in the last row:
 
-$$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_0)
-\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&2&0\\0&0&4&0\\2&0&0&3\end{pmatrix}$$
+```math
+g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_0)
+\qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&2&0\\0&0&4&0\\2&0&0&3\end{pmatrix}
+```
 
 ### Choosing a target
 
-Subspace recovery is governed by the information exponent $p=\min\{|\alpha|:c_\alpha\neq0\}$ --
+Subspace recovery is governed by the information exponent $p=\min\lbrace|\alpha|:c_\alpha\neq0\rbrace$ --
 the *lowest* degree present, not the highest. At $d=128$, $r=4$, `alpha: 1`:
 
 | terms | $p$ | $\max\lvert\alpha\rvert$ | $n \gtrsim d^{p/2}/c_{\min}^2$ |
@@ -192,7 +196,7 @@ the *lowest* degree present, not the highest. At $d=128$, $r=4$, `alpha: 1`:
 
 A low-degree term masks a high-degree one: `[{0:2},{0:4}]` costs the same as `[{0:2}]`.
 
-> **Rough guide only.** $d^{p/2}$ is a CSQ lower bound (Damian et al.), not a guarantee for GD on a ReLU net — SGD's upper bound is $d^{p-1}$ (Ben Arous et al.) and reuse can reach $d\,\mathrm{polylog}\,d$ (Lee et al.). Sweep `data.n` instead.
+> **Rough guide only.** $d^{p/2}$ is a CSQ lower bound (Damian et al.), not a guarantee for GD on a ReLU net — SGD's upper bound is $d^{p-1}$ (Ben Arous et al.) and reuse can reach $d\cdot\mathrm{polylog}(d)$ (Lee et al.). Sweep `data.n` instead.
 
 ## W&B metrics
 
@@ -200,23 +204,23 @@ W&B organizes panels into sections based on the first prefix of the metric name 
 
 **Definitions.** For $d\times d$ PSD matrices $A,B$ with eigenvalues $\lambda_1(A)\ge\lambda_2(A)\ge\dots$:
 
-- **Cosine**: $\cos(A,B)=\langle A,B\rangle_F/(\|A\|_F\|B\|_F)$, which is 1 iff $A\propto B$ and weights directions by their eigenvalues.
-- **Effective ranks**: the stable rank $\operatorname{srank}(A)=\sum_i\lambda_i^2/\lambda_1^2$, intrinsic dimension $\operatorname{idim}(A)=\sum_i\lambda_i/\lambda_1$ and participation ratio $\operatorname{PR}(A)=(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$. Always $\operatorname{srank}\le\operatorname{idim}\le\operatorname{PR}$, with all three equal to $k$ on a flat rank-$k$ spectrum: srank is dominated by the top eigenvalue, idim gives the tail more weight, and PR counts the directions with comparable eigenvalues.
+- **Cosine**: $\cos(A,B)=\langle A,B\rangle_F/(\Vert A\Vert_F\Vert B\Vert_F)$, which is 1 iff $A\propto B$ and weights directions by their eigenvalues.
+- **Effective ranks**: the stable rank $\mathrm{srank}(A)=\sum_i\lambda_i^2/\lambda_1^2$, intrinsic dimension $\mathrm{idim}(A)=\sum_i\lambda_i/\lambda_1$ and participation ratio $\mathrm{PR}(A)=(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$. Always $\mathrm{srank}\le\mathrm{idim}\le\mathrm{PR}$, with all three equal to $k$ on a flat rank-$k$ spectrum: srank is dominated by the top eigenvalue, idim gives the tail more weight, and PR counts the directions with comparable eigenvalues.
 - **Wasserstein-1**: $W_1(A,B)=\sum_X\big|\sum_{X'\le X}(p_{X'}-q_{X'})\big|$, where $p_X=\lambda_X(A)/\sum_{X'}\lambda_{X'}(A)$ normalizes the top-$r$ spectrum of $A$ and $q$ does the same for $B$. It ignores overall scale and is 0 iff the spectral shapes match.
 - **Matching**: for orthonormal $r$-frames $(a_X)$ and $(b_X)$, $\sigma_{a,b}$ is the permutation maximizing $\sum_X\langle a_{\sigma(X)},b_X\rangle^2$ (Hungarian algorithm), pairing each $b_X$ with $a_{\sigma(X)}$.
 - **Principal angles**: $\theta_1\le\dots\le\theta_r$ between a top-$r$ eigenspace and span($U$), with $\cos\theta_X$ the singular values of $Q^\top U^\top$. The prefix `nfm_` or `agop_` says whether $Q$ is $Q_M$ or $Q_G$.
-- **`_ratio` suffix**: the learned statistic divided by the same statistic of the target AGOP $G^*$.
+- **`_ratio` suffix**: the learned statistic divided by the same statistic of the target AGOP $G^{\ast}$.
 
 Metrics without a prefix:
 
 - **`loss`**: the training MSE $\frac1n\sum_i(f(x_i)-y_i)^2$, evaluated at the same parameters as every other metric at that step.
-- **`val_loss`**: the same MSE on `data.val_n` held-out inputs with noiseless labels $f^*(x)$, so it reaches 0 only if $f$ recovers $f^*$.
+- **`val_loss`**: the same MSE on `data.val_n` held-out inputs with noiseless labels $f^{\ast}(x)$, so it reaches 0 only if $f$ recovers $f^{\ast}$.
 
 ### `geometry/`
 
 - **`hessian_max_eigval`**: $\lambda_{\max}(H)$, the sharpness, from `metrics.num_power_iters` steps of power iteration.
 - **`ntk_max_eigval_x2`**: $2\lambda_{\max}(K)$, where $K=\frac1n JJ^\top$ is the empirical NTK. The loss is MSE, so this is exactly the top eigenvalue of the Gauss–Newton Hessian $\frac2n J^\top J$. Its gap to `hessian_max_eigval` is the part of the sharpness that the Gauss–Newton term does not explain.
-- **`sharpness_ratio`**: $\eta\,\lambda_{\max}(H)/2$, which crosses 1 exactly at the edge of stability (EOS), $\lambda_{\max}(H)=2/\eta$; above 1, GD has passed the classical stability limit. Unlike `eos_gap`, it has no units, so runs with different learning rates share one scale.
+- **`sharpness_ratio`**: $\eta\lambda_{\max}(H)/2$, which crosses 1 exactly at the edge of stability (EOS), $\lambda_{\max}(H)=2/\eta$; above 1, GD has passed the classical stability limit. Unlike `eos_gap`, it has no units, so runs with different learning rates share one scale.
 - **`eos_threshold`**: $2/\eta$, constant within a run: the EOS line that `hessian_max_eigval` crosses.
 - **`eos_gap`**: $\lambda_{\max}(H)-2/\eta$, positive above EOS. It marks the same crossing as `sharpness_ratio`, but in eigenvalue units.
 
@@ -225,53 +229,53 @@ Metrics without a prefix:
 All six use the activations $A\in\mathbb{R}^{n\times m}$, $A_{ik}=a_k(x_i)$, of the first hidden layer (the only one logged). The ranks are those of the (uncentered) activation covariance $C=\frac1n A^\top A$, exact when $\min(n,m)\le2048$ and Hutchinson-estimated otherwise.
 
 - **`cov_max_eigval`**: $\lambda_{\max}(C)$.
-- **`intrinsic_dim`**: $\operatorname{idim}(C)$.
-- **`stable_rank`**: $\operatorname{srank}(C)$.
-- **`participation_ratio`**: $\operatorname{PR}(C)$.
+- **`intrinsic_dim`**: $\mathrm{idim}(C)$.
+- **`stable_rank`**: $\mathrm{srank}(C)$.
+- **`participation_ratio`**: $\mathrm{PR}(C)$.
 - **`sparsity_layer1`**: $\frac{1}{mn}\sum_{k,i}\mathbf{1}[a_k(x_i)\le10^{-8}]$, the fraction of (neuron, input) pairs that are off. Unlike `frac_dead`, it also counts neurons that are off on only some inputs, so `frac_dead` ≤ `sparsity_layer1`.
 - **`frac_dead`**: $\frac1m\sum_k\mathbf{1}[a_k(x_i)\le10^{-8}\ \forall i]$, the fraction of neurons off on every training input (dead ReLUs).
 
 ### `nfa/`
 
-Whole-matrix comparisons of $M$, $G$ and $G^*$. The ranks of $G$ use all $d$ of its eigenvalues ($G^*$ has rank at most $r$).
+Whole-matrix comparisons of $M$, $G$ and $G^{\ast}$. The ranks of $G$ use all $d$ of its eigenvalues ($G^{\ast}$ has rank at most $r$).
 
 - **`nfa_cosine`**: $\cos(M,G)$, the Neural Feature Ansatz $M\propto G$. Unlike `subspace/mean_matched_alignment`, it weights directions by their eigenvalues.
-- **`agop_cosine`**: $\cos(G,G^*)$, which is 1 iff the learned AGOP is proportional to the target's.
-- **`nfm_cosine`**: $\cos(M,G^*)$, comparing the NFM directly to the target AGOP.
-- **`agop_nuclear`**: $\|G\|_*=\operatorname{tr}G=\frac1n\sum_i\|\nabla f(x_i)\|^2$, the network's mean squared input-gradient norm.
-- **`nuclear_ratio`**: $\operatorname{tr}G/\operatorname{tr}G^*$, which is 1 when the network's gradient energy matches the target's.
-- **`agop_stable_rank`**: $\operatorname{srank}(G)$.
-- **`agop_intrinsic_dim`**: $\operatorname{idim}(G)$.
-- **`agop_participation_ratio`**: $\operatorname{PR}(G)$, the effective number of directions $G$ uses. Unlike `participation_ratio_ratio`, it is an absolute count.
-- **`stable_rank_ratio`**: $\operatorname{srank}(G)/\operatorname{srank}(G^*)$.
-- **`intrinsic_dim_ratio`**: $\operatorname{idim}(G)/\operatorname{idim}(G^*)$.
-- **`participation_ratio_ratio`**: $\operatorname{PR}(G)/\operatorname{PR}(G^*)$, which is 1 when $G$ has the target's effective rank and above 1 when $G$ spreads over more directions.
+- **`agop_cosine`**: $\cos(G,G^{\ast})$, which is 1 iff the learned AGOP is proportional to the target's.
+- **`nfm_cosine`**: $\cos(M,G^{\ast})$, comparing the NFM directly to the target AGOP.
+- **`agop_nuclear`**: $\Vert G\Vert_{\ast}=\mathrm{tr}(G)=\frac1n\sum_i\Vert\nabla f(x_i)\Vert^2$, the network's mean squared input-gradient norm.
+- **`nuclear_ratio`**: $\mathrm{tr}(G)/\mathrm{tr}(G^{\ast})$, which is 1 when the network's gradient energy matches the target's.
+- **`agop_stable_rank`**: $\mathrm{srank}(G)$.
+- **`agop_intrinsic_dim`**: $\mathrm{idim}(G)$.
+- **`agop_participation_ratio`**: $\mathrm{PR}(G)$, the effective number of directions $G$ uses. Unlike `participation_ratio_ratio`, it is an absolute count.
+- **`stable_rank_ratio`**: $\mathrm{srank}(G)/\mathrm{srank}(G^{\ast})$.
+- **`intrinsic_dim_ratio`**: $\mathrm{idim}(G)/\mathrm{idim}(G^{\ast})$.
+- **`participation_ratio_ratio`**: $\mathrm{PR}(G)/\mathrm{PR}(G^{\ast})$, which is 1 when $G$ has the target's effective rank and above 1 when $G$ spreads over more directions.
 
 ### `spectrum/`
 
-- **`wasserstein1_agop_target`**: $W_1(G,G^*)$. Unlike `wasserstein1_nfm_agop`, it measures progress toward the target.
+- **`wasserstein1_agop_target`**: $W_1(G,G^{\ast})$. Unlike `wasserstein1_nfm_agop`, it measures progress toward the target.
 - **`wasserstein1_nfm_agop`**: $W_1(M,G)$, a spectral NFA test that needs no target.
-- **`rayleighX`**: $u_X^\top G\,u_X$, the learned AGOP's energy along target direction X; X indexes the rows $u_X$ of $U$. Unlike `rayleigh_ratioX`, it is not normalized by the target.
-- **`rayleigh_ratioX`**: `rayleighX` divided by $\lambda^*_X$; X indexes the target direction $u_X$ in the numerator and the X-th largest target eigenvalue in the denominator. That denominator equals $u_X^\top G^*u_X$, making 1 mean "matched", only when $G^*$ is diagonal in the $U$ basis with eigenvalues decreasing in X; product terms or cycled degrees can break this.
+- **`rayleighX`**: $u_X^\top Gu_X$, the learned AGOP's energy along target direction X; X indexes the rows $u_X$ of $U$. Unlike `rayleigh_ratioX`, it is not normalized by the target.
+- **`rayleigh_ratioX`**: `rayleighX` divided by $\lambda_X^{\ast}$; X indexes the target direction $u_X$ in the numerator and the X-th largest target eigenvalue in the denominator. That denominator equals $u_X^\top G^{\ast}u_X$, making 1 mean "matched", only when $G^{\ast}$ is diagonal in the $U$ basis with eigenvalues decreasing in X; product terms or cycled degrees can break this.
 
 ### `subspace/`
 
 - **`nfm_mean_alignment`**: $\frac1r\sum_X\cos^2\theta_X$, the mean of `align_dirX`, which is 1 iff the subspace is recovered.
 - **`nfm_cos_max`**: $\cos\theta_1$, i.e. how well the best-captured direction is recovered. It has no AGOP counterpart only because `log_run_to_wandb` doesn't log one: `subspace_recovery` ([src/metrics.py](src/metrics.py)) computes `agop_cos_max` and per-direction AGOP alignments as well.
 - **`nfm_sin_max`**: $\sin\theta_r$, i.e. how badly the worst-captured direction is missed, which is 0 iff the subspace is fully recovered.
-- **`nfm_subspace_dist_sq`**: the squared chordal distance $\|\sin\Theta\|_F^2=r(1-a)$, with $a$ = `nfm_mean_alignment`, from 0 (recovered) to $r$ (orthogonal). It is squared so that its power-law exponent compares directly with the loss's. Compared with `agop_subspace_dist_sq`, it shows whether the weights or the AGOP find the subspace first.
+- **`nfm_subspace_dist_sq`**: the squared chordal distance $\Vert\sin\Theta\Vert_F^2=r(1-a)$, with $a$ = `nfm_mean_alignment`, from 0 (recovered) to $r$ (orthogonal). It is squared so that its power-law exponent compares directly with the loss's. Compared with `agop_subspace_dist_sq`, it shows whether the weights or the AGOP find the subspace first.
 - **`agop_mean_alignment`**: `nfm_mean_alignment` for $Q_G$.
 - **`agop_sin_max`**: `nfm_sin_max` for $Q_G$.
 - **`agop_subspace_dist_sq`**: `nfm_subspace_dist_sq` for $Q_G$. Compared with `nfm_subspace_dist_sq`, it shows whether the AGOP or the weights find the subspace first.
 - **`mean_matched_alignment`**: $\frac1r\sum_X\langle m_{\sigma(X)},v_X\rangle^2$ with $\sigma=\sigma_{m,v}$, the Neural Feature Ansatz at the level of eigenvectors. Unlike `nfa/nfa_cosine`, it ignores eigenvalues, and unlike `nfm_mean_alignment`, it compares $M$ to $G$ rather than to $U$.
-- **`mean_align_true`**: the mean of `align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v^*_X$ within span($U$), so this is noise; use the principal-angle metrics for those targets instead.
-- **`align_dirX`**: $\|Q_M^\top u_X\|^2\in[0,1]$, the fraction of target direction X inside the NFM's top-$r$ eigenspace; X indexes the rows $u_X$ of $U$. It is logged for the NFM only.
-- **`align_trueX`**: $\langle v_{\sigma(X)},v^*_X\rangle^2$ with $\sigma=\sigma_{v,v^*}$; X indexes the target-AGOP eigenvectors $v^*_X$ ("true" means an eigenvector of $G^*$, not a row of $U$). Unlike `rank_trueX`, it says how well $v^*_X$ is matched, not by which learned eigenvector.
-- **`rank_trueX`**: $\sigma(X)$, the index of the learned-AGOP eigenvector matched to $v^*_X$; X indexes $v^*_X$. It reads X when $G$ orders the directions as $G^*$ does. Runs logged under the old key `nfa/rank_trueX` hold the inverse permutation instead.
+- **`mean_align_true`**: the mean of `align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v_X^{\ast}$ within span($U$), so this is noise; use the principal-angle metrics for those targets instead.
+- **`align_dirX`**: $\Vert Q_M^\top u_X\Vert^2\in[0,1]$, the fraction of target direction X inside the NFM's top-$r$ eigenspace; X indexes the rows $u_X$ of $U$. It is logged for the NFM only.
+- **`align_trueX`**: $\langle v_{\sigma(X)},v_X^{\ast}\rangle^2$ with $\sigma=\sigma_{v,v^{\ast}}$; X indexes the target-AGOP eigenvectors $v_X^{\ast}$ ("true" means an eigenvector of $G^{\ast}$, not a row of $U$). Unlike `rank_trueX`, it says how well $v_X^{\ast}$ is matched, not by which learned eigenvector.
+- **`rank_trueX`**: $\sigma(X)$, the index of the learned-AGOP eigenvector matched to $v_X^{\ast}$; X indexes $v_X^{\ast}$. It reads X when $G$ orders the directions as $G^{\ast}$ does. Runs logged under the old key `nfa/rank_trueX` hold the inverse permutation instead.
 
 ### `slices/`
 
-- **`directional`**: an image logged once after training, with one panel per target direction $u_X$ showing $f^*(t\,u_X)$ and $f(t\,u_X)$ for $t\in[-3,3]$.
+- **`directional`**: an image logged once after training, with one panel per target direction $u_X$ showing $f^{\ast}(tu_X)$ and $f(tu_X)$ for $t\in[-3,3]$.
 
 ### Run summary
 
@@ -280,7 +284,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 - **`regime`**: `monotonic`, `catapult` (the loss rises, then ends below its value before the rise) or `diverged` (the loss is non-finite, or its final value exceeds 100× its minimum).
 - **`loss_final`**: `loss` at the last step.
 - **`loss_min`**: the minimum of `loss` over training.
-- **`loss_exponent`**: $\beta$ in $\text{loss}\approx C\,t^\beta$, fit over the longest log-log window of at least 5 steps with $R^2\ge0.98$; NaN if no window qualifies.
+- **`loss_exponent`**: $\beta$ in $\text{loss}\approx Ct^\beta$, fit over the longest log-log window of at least 5 steps with $R^2\ge0.98$; NaN if no window qualifies.
 - **`loss_exponent_r2`**: the $R^2$ of that fit.
 - **`loss_fit_lo`**: the first step of the fit window, counting from 1 (W&B step + 1).
 - **`loss_fit_hi`**: the last step of the fit window, counting from 1.
@@ -292,7 +296,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 
 ### Aggregate run
 
-`scripts/aggregate.py` logs a separate run, `<sweep name>_scaling` with job type `aggregate`, that fits $y\approx C\,\texttt{width}^\beta$ per parameterization. Each $y$ is first reduced over the learning-rate grid (min, or max for `final_nuclear_ratio`), with diverged runs dropped.
+`scripts/aggregate.py` logs a separate run, `<sweep name>_scaling` with job type `aggregate`, that fits $y\approx C\cdot\texttt{width}^\beta$ per parameterization. Each $y$ is first reduced over the learning-rate grid (min, or max for `final_nuclear_ratio`), with diverged runs dropped.
 
 - **`scaling/exponents`**: a table of every fit: $\beta$, $R^2$ and the width range it covers.
 - **`scaling/<y>_vs_model.width`**: the log-log plot of each fit, where $y$ is `loss_min`, `final_nfm_subspace_dist_sq` or `final_nuclear_ratio`.
