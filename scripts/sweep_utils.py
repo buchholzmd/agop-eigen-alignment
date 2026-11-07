@@ -1,6 +1,5 @@
-"""Grid expansion, feasibility filtering, the lr early-exit scan, and W&B sweeps."""
+"""A config's sweep as a W&B grid sweep, and one served point back as a config."""
 import copy
-import json
 import math
 
 from config import get_in, set_in
@@ -20,7 +19,7 @@ def wandb_sweep_config(cfg, config_name):
 
     The lr values are the config's lr_scan grid, or its `sweep.optim.lr` list when it
     sweeps lr directly. W&B's grid has no early exit and no constraints, so it serves
-    every combination, feasible or not; scripts/trial.py closes infeasible ones at once.
+    every combination, feasible or not; run_sweep.py closes infeasible ones at once.
     """
     axes = dict(cfg.get("sweep") or {})
     lrs = axes.pop("optim.lr", None)
@@ -41,9 +40,6 @@ def wandb_sweep_config(cfg, config_name):
         "name": cfg.get("name", "sweep"),
         "method": "grid",
         "metric": dict(get_in(cfg, "wandb.sweep_metric")),
-        "program": "scripts/trial.py",
-        "command": ["${env}", "${interpreter}", "${program}",
-                    "--config", config_name, "--params", "${args_json_file}"],
         "parameters": params,
     }
 
@@ -52,12 +48,12 @@ def grid_size(sweep_config):
     return math.prod(len(p["values"]) for p in sweep_config["parameters"].values())
 
 
-def trial_config(base, params):
-    """The inverse of wandb_sweep_config: the full config for one (cell, lr) trial.
+def point_config(base, params):
+    """The inverse of wandb_sweep_config: the full config for one (cell, lr) point.
 
-    params is the flat {parameter: value} dict W&B hands the trial. Values are looked
-    up in the config's own lists, so each keeps its YAML type rather than whatever
-    the JSON round-trip made of it.
+    params is the flat {parameter: value} dict W&B serves for the point. Values are
+    looked up in the config's own lists, so each keeps its YAML type rather than
+    whatever W&B's round-trip made of it. Extra keys in params are ignored.
     """
     cfg = copy.deepcopy(base)
     sweep = cfg.pop("sweep", None) or {}
@@ -116,12 +112,3 @@ def feasible(cfg):
     if cap > L.get("max_capacity", math.inf):
         return False, f"n/d {cap:.3g} > {L['max_capacity']} (past saturation)"
     return True, ""
-
-
-def is_diverged(metrics, factor=100.0):
-    """A run diverged if the loss went non-finite or ended far above its own minimum."""
-    import numpy as np
-    L = np.asarray([float(v) for v in metrics["loss"]])
-    if not np.all(np.isfinite(L)):
-        return True
-    return float(L[-1]) > factor * float(np.nanmin(L))

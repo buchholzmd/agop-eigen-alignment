@@ -132,8 +132,11 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
         metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U.T,)}
     return metrics_config
 
-def run_one(cfg, log_wandb=None):
-    '''Execute one configuration end to end. -> dict with traces, constants and artifacts.'''
+def run_one(cfg, log_wandb=None, run=None):
+    '''Execute one configuration end to end. -> dict with traces, constants and artifacts.
+
+    run: a W&B run that already exists (a sweep point's); the results are logged to it.
+    '''
     rng = RNGKey(get_in(cfg, "data.seed"))
     X, y, X_val, y_val, U, target_fn, G_star = build_data(cfg, rng)
     model, state, params0 = build_model(cfg, rng)
@@ -161,11 +164,11 @@ def run_one(cfg, log_wandb=None):
                state=state, model=model, lr=lr, eta_crit=eta_crit,
                ntk_lambda0=ntk_lambda0, hess_lambda0=hess_lambda0, r=r)
 
-    if (log_wandb if log_wandb is not None else get_in(cfg, "wandb.enabled")):
-        log_run_to_wandb(out)
+    if run is not None or (log_wandb if log_wandb is not None else get_in(cfg, "wandb.enabled")):
+        log_run_to_wandb(out, run)
     return out
 
-def log_run_to_wandb(out):
+def log_run_to_wandb(out, run=None):
     import wandb
     cfg = out["cfg"]
     d, r = get_in(cfg, "data.d"), get_in(cfg, "data.r")
@@ -187,19 +190,20 @@ def log_run_to_wandb(out):
         n_params     = d * m + 2 * m + 1,
     )
 
-    # Under a W&B sweep agent the sweep fixes entity and project, and wandb.init
-    # warns that it ignores both, so pass them only outside a sweep.
-    in_sweep = bool(os.environ.get("WANDB_SWEEP_ID"))
-    run = wandb.init(entity=None if in_sweep else get_in(cfg, "wandb.entity"),
-                     project=None if in_sweep else get_in(cfg, "wandb.project"),
-                     name=cfg.get("_wandb_name") or run_name(cfg),
-                     group=group_name(cfg),
-                     job_type=get_in(cfg, "model.parameterization"),
-                     tags=run_tags(cfg),
-                     config=config,
-                     mode=get_in(cfg, "wandb.mode"),
-                     notes=get_in(cfg, "wandb.notes") or None,
-                     reinit=True)
+    if run is None:
+        run = wandb.init(entity=get_in(cfg, "wandb.entity"), project=get_in(cfg, "wandb.project"),
+                         name=cfg.get("_wandb_name") or run_name(cfg),
+                         group=group_name(cfg),
+                         job_type=get_in(cfg, "model.parameterization"),
+                         tags=run_tags(cfg),
+                         config=config,
+                         mode=get_in(cfg, "wandb.mode"),
+                         notes=get_in(cfg, "wandb.notes") or None,
+                         reinit=True)
+    else:
+        # A sweep point's run: run_sweep.py has named and tagged it, and the sweep's
+        # parameters in its config are locked, so only add what is missing.
+        run.config.update({k: v for k, v in config.items() if k not in run.config})
     m, r = out["metrics"], out["r"]
     lr = out["lr"]
 

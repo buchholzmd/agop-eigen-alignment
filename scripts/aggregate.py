@@ -49,7 +49,7 @@ def load_runs(entity, project, group, cache_dir):
 
     runs = []
     for run in wandb.Api().runs(f"{entity}/{project}", filters={"group": group}):
-        if "infeasible" in run.tags:           # sweep trials closed without training
+        if "infeasible" in run.tags:           # sweep points closed without training
             continue
         cache = cache_dir / f"{run.id}.parquet"
         if cache.exists():

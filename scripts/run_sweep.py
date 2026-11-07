@@ -1,110 +1,98 @@
 #!/usr/bin/env python
-"""Run a slice of the sweep. One SLURM array task = one chunk of CELLS.
+"""Run a config's sweep as a W&B Sweep.
 
-A "cell" is everything except the learning rate: (parameterization, width, d, r, n).
-Within a cell the learning rates are scanned in ASCENDING order and the scan stops
-after `lr_scan.stop_after_diverged` consecutive diverged runs -- past the stability
-threshold every larger lr diverges identically, so running them buys nothing.
+A *cell* is every sweep axis except the learning rate; a *point* is one (cell, lr)
+pair and becomes one W&B run. W&B's grid serves every point: there is no early exit
+over lr, and a point that fails the config's `limits:` checks is closed at once
+without training, tagged `infeasible`.
 
-    python scripts/run_sweep.py --config full_sweep.yaml --chunk 0 --nchunks 64
+    python scripts/run_sweep.py --config full_sweep.yaml --dry-run      # show the sweep, create nothing
+    python scripts/run_sweep.py --config full_sweep.yaml --create       # create it; prints its id last
+    python scripts/run_sweep.py --config full_sweep.yaml --sweep-id ID  # run points until the grid is done
+    python scripts/run_sweep.py --config full_sweep.yaml --sweep-id ID --count 1
+
+scripts/submit.sh runs --create once, then starts SLURM tasks that each run --sweep-id.
 """
-import argparse, json, os, pathlib, sys, time, traceback
+import argparse, itertools, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "src"))
-sys.path.insert(0, HERE)
-
+sys.path[:0] = [os.path.join(os.path.dirname(HERE), "src"), HERE]
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-import jax
-jax.config.update("jax_default_matmul_precision", "highest")
+import yaml
 
-from config import load_config, expand, get_in, run_name
-from sweep_utils import expand_dr, lr_grid, feasible, is_diverged
+from config import load_config, get_in, run_config, run_name, group_name, run_tags
+from sweep_utils import wandb_sweep_config, grid_size, point_config, feasible
 
 
-def cell_id(cfg):
-    return (f"param={get_in(cfg,'model.parameterization')}__m={get_in(cfg,'model.width')}"
-            f"__d={get_in(cfg,'data.d')}__r={get_in(cfg,'data.r')}__n={get_in(cfg,'data.n')}")
+def describe(base, sweep, config_name):
+    """Print the sweep's size to stderr, keeping stdout free for the sweep id."""
+    params = sweep["parameters"]
+    lrs = params["optim.lr"]["values"]
+    names = [k for k in params if k != "optim.lr"]
+    cells = list(itertools.product(*(params[k]["values"] for k in names)))
+    ok = sum(feasible(point_config(base, {**dict(zip(names, c)), "optim.lr": lrs[0]}))[0]
+             for c in cells)
+    print(f"{config_name}: {grid_size(sweep):,} points = {len(cells):,} cells x "
+          f"{len(lrs)} lrs; {ok:,} cells feasible", file=sys.stderr)
+
+
+def run_point(base):
+    """Run the point W&B serves next: train it, or close it at once if infeasible."""
+    import wandb
+    # W&B hands over the point only through the run, so the run is created first and
+    # named and tagged afterwards. group and job_type cannot change after init, which
+    # is why job_type is the config's constant wandb.job_type, not the parameterization.
+    run = wandb.init(group=group_name(base), job_type=get_in(base, "wandb.job_type"),
+                     notes=get_in(base, "wandb.notes") or None, mode=get_in(base, "wandb.mode"))
+    cfg = point_config(base, dict(run.config))
+    ok, why = feasible(cfg)
+    run.name = run_name(cfg)
+    run.tags = tuple(run_tags(cfg) + ([] if ok else ["infeasible"]))
+    # The sweep's own parameters are already in run.config and locked; add the rest.
+    run.config.update({k: v for k, v in run_config(cfg).items() if k not in run.config})
+    if not ok:
+        run.summary["infeasible"] = why
+        print(f"infeasible, closed without training: {why}", flush=True)
+        return
+
+    import jax
+    from experiment import run_one
+    try:
+        run_one(cfg, run=run)
+    finally:
+        jax.clear_caches()      # one process runs many points; drop their compiled code
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", required=True)
-    ap.add_argument("--chunk", type=int, default=0)
-    ap.add_argument("--nchunks", type=int, default=1)
-    ap.add_argument("--outdir", default=None, help="overrides paths.outputs from the config")
-    ap.add_argument("--no-wandb", action="store_true")
-    ap.add_argument("--dry-run", action="store_true", help="list work, run nothing")
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="print the sweep config, create nothing")
+    mode.add_argument("--create", action="store_true", help="create the W&B sweep, print its id")
+    mode.add_argument("--sweep-id", help="run this sweep's points until the grid is done")
+    ap.add_argument("--count", type=int, default=None, help="with --sweep-id: stop after this many points")
     a = ap.parse_args()
 
     base = load_config(a.config)
-    outdir = a.outdir or os.path.join(ROOT, get_in(base, "paths.outputs"))
-    cells = [expand_dr(c) for c in expand(base)]
-    cells = [c for c in cells if feasible(c)[0]]
-    mine = cells[a.chunk::a.nchunks]            # strided: spreads the slow cells across tasks
-    lrs = lr_grid(base)
-    stop_after = base.get("lr_scan", {}).get("stop_after_diverged", 2)
+    entity, project = get_in(base, "wandb.entity"), get_in(base, "wandb.project")
 
-    print(f"{a.config}: {len(cells)} feasible cells, chunk {a.chunk}/{a.nchunks} -> {len(mine)}",
-          flush=True)
-    print(f"lr scan: {len(lrs)} values ascending, stop after {stop_after} consecutive diverged",
-          flush=True)
-    print(f"jax {jax.__version__} on {jax.devices()}", flush=True)
-    if a.dry_run:
-        for c in mine: print("  ", cell_id(c))
+    if a.sweep_id:
+        import jax
+        jax.config.update("jax_default_matmul_precision", "highest")
+        print(f"jax {jax.__version__} on {jax.devices()}", flush=True)
+        import wandb
+        wandb.agent(a.sweep_id, function=lambda: run_point(base),
+                    entity=entity, project=project, count=a.count)
         return
 
-    from experiment import run_one
-
-    root = pathlib.Path(outdir) / base.get("name", "sweep")
-    for ci, cfg in enumerate(mine):
-        cid = cell_id(cfg)
-        cdir = root / cid
-        cdir.mkdir(parents=True, exist_ok=True)
-        if (cdir / "cell_done.json").exists():
-            print(f"[cell {ci+1}/{len(mine)}] skip (done) {cid}", flush=True)
-            continue
-
-        print(f"[cell {ci+1}/{len(mine)}] {cid}", flush=True)
-        consecutive, executed, t0 = 0, 0, time.time()
-        for lr in lrs:
-            one = json.loads(json.dumps(cfg))        # deep copy, no shared state
-            one["optim"]["lr"] = float(lr)
-            one["_wandb_name"] = run_name(one)
-            tag = one["_wandb_name"]
-            rdir = cdir / f"lr={lr:.5g}"
-            if (rdir / "done.json").exists():
-                continue                              # resume is free
-
-            try:
-                out = run_one(one, log_wandb=not a.no_wandb)
-            except Exception:                         # one bad point must not kill the task
-                print(f"    FAILED {tag}", flush=True)
-                traceback.print_exc()
-                rdir.mkdir(parents=True, exist_ok=True)
-                (rdir / "failed.txt").write_text(traceback.format_exc())
-                continue
-
-            executed += 1
-            div = is_diverged(out["metrics"])
-            rdir.mkdir(parents=True, exist_ok=True)
-            (rdir / "done.json").write_text(json.dumps({
-                "lr": float(lr), "eta_crit": float(out["eta_crit"]),
-                "final_loss": float(out["metrics"]["loss"][-1]), "diverged": bool(div)}))
-            print(f"    lr={lr:.5g} final={float(out['metrics']['loss'][-1]):.4g} "
-                  f"{'DIVERGED' if div else ''}", flush=True)
-
-            consecutive = consecutive + 1 if div else 0
-            if consecutive >= stop_after:
-                print(f"    -> stopping cell at lr={lr:.5g}: {consecutive} consecutive diverged",
-                      flush=True)
-                break
-
-        (cdir / "cell_done.json").write_text(json.dumps({
-            "executed": executed, "of": len(lrs), "seconds": round(time.time() - t0, 1)}))
-        print(f"    cell done: {executed}/{len(lrs)} lrs in {time.time()-t0:.0f}s", flush=True)
+    sweep = wandb_sweep_config(base, a.config)
+    describe(base, sweep, a.config)
+    if a.dry_run:
+        print(yaml.safe_dump(sweep, sort_keys=False), file=sys.stderr)
+        return
+    import wandb
+    print(wandb.sweep(sweep, entity=entity, project=project))
 
 
 if __name__ == "__main__":

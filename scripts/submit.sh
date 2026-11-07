@@ -25,13 +25,12 @@ if [ -z "$ACCOUNT" ]; then
 fi
 
 if [ -z "$SWEEP_ID" ]; then
-  SWEEP_ID="$(python scripts/wandb_sweep.py --config "$CFG" | tail -n 1)"
+  SWEEP_ID="$(python scripts/run_sweep.py --config "$CFG" --create | tail -n 1)"
 fi
 if [ -z "$SWEEP_ID" ]; then
   echo "error: could not create the W&B sweep" >&2; exit 1
 fi
-SWEEP_PATH="$(get wandb.entity)/$(get wandb.project)/$SWEEP_ID"
-echo "sweep $SWEEP_PATH"
+echo "sweep $(get wandb.entity)/$(get wandb.project)/$SWEEP_ID"
 echo "to add agents later: ./scripts/submit.sh $CFG $SWEEP_ID"
 
 sbatch --account="$ACCOUNT" \
@@ -41,5 +40,5 @@ sbatch --account="$ACCOUNT" \
        --time="$(get slurm.time)" \
        --array="$(get slurm.array)" \
        --output="$(get paths.outputs)/slurm/%x-%A_%a.out" \
-       --export=ALL,SWEEP_PATH="$SWEEP_PATH" \
+       --export=ALL,SWEEP_CONFIG="$CFG",SWEEP_ID="$SWEEP_ID" \
        scripts/sweep.sbatch

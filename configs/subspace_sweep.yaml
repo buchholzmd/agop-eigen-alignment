@@ -28,7 +28,6 @@ lr_scan:
   lo: 0.1
   hi: 5.0
   num: 51
-  stop_after_diverged: 2
 
 limits:
   max_params: 100000000
