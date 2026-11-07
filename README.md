@@ -145,13 +145,9 @@ $h_k = He_k/\sqrt{k!}$:
 
 $$g(z) \;=\; \sum_{m} c_m \prod_{j=1}^{r} h_{\alpha^{(m)}_j}(z_j), \qquad \alpha^{(m)} \in \mathbb{N}_0^{\,r}$$
 
-`src/poly.py` evaluates this for any multi-index set $\Lambda = \{\alpha^{(m)}\}$. The config does
-not list $\Lambda$ directly, because `data.r` is a sweep axis and a literal matrix has a fixed
-number of columns; instead `target.terms` gives a **rule** that regenerates $\Lambda$ for whatever
-`r` is. The rule is applied in `build_data` ([src/experiment.py](src/experiment.py), the
-`target.terms` block), which emits the `(alpha, coeffs)` pair `poly` consumes.
+`src/poly.py` evaluates this for any multi-index set $\Lambda = \{\alpha^{(m)}\}$. Because `data.r` is a sweep axis and the matrix form of $\Lambda$ would therefore change. `target.terms` gives a **rule** that regenerates $\Lambda$ for whatever `r` is. The rule is applied in `build_data` of [src/experiment.py](src/experiment.py).
 
-### Grammar
+### Configuring degree by term and coordinate 
 
 A **term** maps a *relative* direction offset to a Hermite degree. Three constructs:
 
@@ -169,26 +165,23 @@ group additionally divided by $\sqrt{|\text{group}|}$, so $\mathbb{E}[f^{*2}] = 
 
 ### Examples (shown at $r = 4$)
 
-**`terms: [{0: 2}]`** — one quadratic link per direction, the canonical single-index-per-direction
-target (Ben Arous et al. [arXiv:2508.03688](https://arxiv.org/abs/2508.03688) use exactly this
-shape with $\sigma = He_2$):
+**`terms: [{0: 2}]`** — one quadratic link per direction i.e.  $\sigma = He_2$:
 
 $$g(z) = c_0 h_2(z_0) + c_1 h_2(z_1) + c_2 h_2(z_2) + c_3 h_2(z_3)$$
 
-**`terms: [[{0: 4}], [{0: 3}], [{0: 2}]]`** — nested, so degrees **differ by direction**, cycling
+**`terms: [[{0: 4}], [{0: 3}], [{0: 2}]]`** — degrees **differ by direction**, cycling
 with period 3:
 
 $$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1) + c_2 h_2(z_2) + c_3 h_4(z_3)
 \qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&0&0\\0&0&2&0\\0&0&0&4\end{pmatrix}$$
 
-**`terms: [[{0: 4}], [{0: 3}, {0: 2}]]`** — nested groups, and group 1 holds **two siblings**, so
-odd directions get a *sum* of two degrees on the same coordinate:
+**`terms: [[{0: 4}], [{0: 3}, {0: 2}]]`** — odd directions get a *sum* of two degrees on the same coordinate:
 
 $$g(z) = c_0 h_4(z_0) + \tfrac{c_1}{\sqrt2}\big[h_3(z_1) + h_2(z_1)\big]
        + c_2 h_4(z_2) + \tfrac{c_3}{\sqrt2}\big[h_3(z_3) + h_2(z_3)\big]$$
 
-**`terms: [[{0: 4}], [{0: 3, 1: 2}]]`** — group 1 is a **single term with two offsets**, so it is a
-*product* across two directions. Note the wraparound in the last row:
+**`terms: [[{0: 4}], [{0: 3, 1: 2}]]`** — group 1 is a **single term with two offsets**, a
+*product* across two directions with a wraparound in the last row:
 
 $$g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_0)
 \qquad \alpha = \begin{pmatrix}4&0&0&0\\0&3&2&0\\0&0&4&0\\2&0&0&3\end{pmatrix}$$
@@ -206,18 +199,9 @@ the *lowest* degree present, not the highest. At $d=128$, $r=4$, `alpha: 1`:
 | `[{0: 2}, {0: 4}]` | 2 | 4 | 2,916 |
 | `[{0: 4}]` | 4 | 4 | 373,191 |
 
-Adding a high-degree term alongside a low-degree one does not raise $p$: `[{0: 2}, {0: 4}]`
-costs the same as `[{0: 2}]`, because the degree-2 part already exposes every direction. Only
-the degree-4 term *alone* raises the exponent.
+A low-degree term masks a high-degree one: `[{0:2},{0:4}]` costs the same as `[{0:2}]`.
 
-> **Rough guide only.** $d^{p/2}$ is a CSQ *lower* bound (Damian et al.
-> [arXiv:2305.10633](https://arxiv.org/abs/2305.10633)) for correlational queries, not a
-> guarantee for full-batch GD on a ReLU network. One-pass SGD's upper bound is $d^{p-1}$
-> (Ben Arous et al. [arXiv:2003.10409](https://arxiv.org/abs/2003.10409)) and data reuse can
-> reach $d\,\mathrm{polylog}\,d$ (Lee et al. [arXiv:2406.01581](https://arxiv.org/abs/2406.01581)) --
-> three orders of magnitude apart at $p=4$. Which applies here is an open question, and the
-> $1/c_{\min}^2$ factor is a heuristic for per-direction signal strength, not from any theorem.
-> Sweep `data.n` rather than trusting these numbers.
+> **Rough guide only.** $d^{p/2}$ is a CSQ lower bound (Damian et al.), not a guarantee for GD on a ReLU net — SGD's upper bound is $d^{p-1}$ (Ben Arous et al.) and reuse can reach $d\,\mathrm{polylog}\,d$ (Lee et al.). Sweep `data.n` instead.
 
 ## W&B metrics
 
