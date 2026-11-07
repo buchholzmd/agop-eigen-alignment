@@ -64,9 +64,17 @@ def nfa_cosine(state, **kwargs):
     return {"matrix_correlation": matrix_cosine(M, G)}
 
 def nfa_alignment(state, **kwargs):
+    """The NFA at the level of eigenvectors and eigenspaces: top-r NFM vs top-r AGOP.
+
+    align_bases matches individual eigenvectors, which is unstable when
+    eigenvalues are tied; subspace_dist_sq compares the two top-r eigenspaces
+    by their principal angles, which is not.
+    """
     M = kwargs["nfm_eigs"]
     G = kwargs["agop_eigs"]
-    return align_bases(M["eigvecs"], G["eigvecs"])
+    result = align_bases(M["eigvecs"], G["eigvecs"])
+    result["subspace_dist_sq"] = subspace_angles(M["eigvecs"], G["eigvecs"])["subspace_dist_sq"]
+    return result
 
 def neuron_sparsity(state, model=None, X=None, activations=None, **kwargs):
     if activations is None:
