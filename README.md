@@ -24,6 +24,17 @@ One paragraph motivating the project. This can be, for example, the paper abstra
 
 **Notation.** $f$ is the network and $f^{\ast}(x)=g(Ux)$ the target, with $u_X$ the X-th row of $U\in\mathbb{R}^{r\times d}$ (see [Specifying the target](#specifying-the-target)). $G_n=\frac1n\sum_i\nabla f(x_i)\nabla f(x_i)^\top$ is the network's AGOP on the $n$ training inputs and $G=\mathbb E_{x\sim\mathcal{N}(0,I_d)}[\nabla f(x)\nabla f(x)^\top]$ its population EGOP. $G_n^{\ast}$ and $G^{\ast}$ are the same two matrices for the target $f^{\ast}$, so the subscript $n$ always marks an average over the training inputs (see [Target EGOP](#target-egop)). All four are $d\times d$; the metrics use $G_n$, $G_n^{\ast}$ and $G^{\ast}$, but not $G$. $M=W^\top W$ is the NFM of the first-layer weights $W\in\mathbb{R}^{m\times d}$. $v_{n,X}$, $v_{n,X}^{\ast}$, $v_X^{\ast}$, $m_X$ are the eigenvectors of $G_n$, $G_n^{\ast}$, $G^{\ast}$, $M$ with the X-th largest eigenvalue ($\lambda_{n,X}$, $\lambda_{n,X}^{\ast}$, $\lambda_X^{\ast}$), and $Q_{G_n},Q_M\in\mathbb{R}^{d\times r}$ hold the top $r$ eigenvectors of $G_n$ and $M$ as columns. $H$ is the training-loss Hessian, and $\eta$ is the absolute learning rate (`lr_absolute` in the run config).
 
+**Sweep targets.** `target_sweep.yaml` crosses information exponent $p$ against additive versus interacting, with $c_k\propto k^{-\alpha^{\ast}}$, $\Vert c\Vert_2=1$, and direction indices mod $r$:
+
+| | $g(z)$ | $p$ | |
+|---|---|---|---|
+| **T1** | $\sum_k \frac{c_k}{\sqrt2}\left[h_1(z_k)+h_2(z_k)\right]$ | 1 | additive |
+| **T2** | $\sum_k \frac{c_k}{\sqrt2}\left[h_1(z_k)+h_1(z_k)h_1(z_{k+1})\right]$ | 1 | interacting |
+| **T3** | $\sum_k c_k h_4(z_k)$ | 4 | additive |
+| **T4** | $\sum_k \frac{c_k}{\sqrt2}\left[h_4(z_k)+h_2(z_k)h_2(z_{k+1})\right]$ | 4 | interacting |
+
+T1 is also the fixed target of the width, parameterization and dataset sweeps. See [Specifying the target](#specifying-the-target) for the `terms:` each one is written as.
+
 The loss responds to the square. This is my own derivation, not from the literature. Suppose the network has the right linear link $g(z)=a^\top z$ but the wrong subspace. Then the excess loss is $\mathbb{E}[(a^\top U(I-P_Q)x)^2]=\Vert(I-P_Q)U^\top a\Vert^2$, which is quadratic in the subspace error, and the same holds to leading order for smooth links. So if loss $\propto$ dist², fitting the unsquared distance gives half the loss exponent. aggregate.py fits both loss_min and final_nfm_subspace_dist against width, so that's where the choice shows up.
 
 ### Target EGOP
@@ -48,7 +59,7 @@ $$\Gamma_{ik}=\mathbb{E}[\partial_i g(z)\partial_k g(z)]=\sum_{\beta\in\mathbb N
 
 On the diagonal $\Gamma_{ii}=\sum_\beta c_\beta^2\beta_i$, so $\mathrm{tr}(G^{\ast})=\mathbb{E}\Vert\nabla f^{\ast}(x)\Vert^2=\sum_\beta c_\beta^2|\beta|$ with $|\beta|=\sum_j\beta_j$. Off the diagonal, $\Gamma_{ik}\neq0$ needs two terms of $g$ whose multi-indices differ by exactly $e_i-e_k$. When every term of $g$ involves a single direction, only pairs of degree-1 terms qualify, so $\Gamma=D+aa^\top$, with $a_k=c_{e_k}$ the linear part of $g$ and $D$ diagonal, $D_{kk}=\sum_{p\ge2}pc_{pe_k}^2$. The rows $u_X$ of $U$ are then eigenvectors of $G^{\ast}$ only if the linear part is zero or lies along one direction.
 
-**Example: the sweep target.** The dataset, width, parameterization and target sweeps use `target.terms: [{0: 1}, {0: 2}]`, so direction $k$ contributes $\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$, with $c_k\propto k^{-\alpha^{\ast}}$ for $k=1,\dots,r$ and $\Vert c\Vert_2=1$. Then $a_k=c_k/\sqrt2$ and $D_{kk}=2(c_k/\sqrt2)^2=c_k^2$, so
+**Example: T1.** The dataset, width, parameterization and target sweeps use `target.terms: [{0: 1}, {0: 2}]`, so direction $k$ contributes $\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$, with $c_k\propto k^{-\alpha^{\ast}}$ for $k=1,\dots,r$ and $\Vert c\Vert_2=1$. Then $a_k=c_k/\sqrt2$ and $D_{kk}=2(c_k/\sqrt2)^2=c_k^2$, so
 
 $$\Gamma=\mathrm{diag}(c_1^2,\dots,c_r^2)+\tfrac12cc^\top,\qquad\mathrm{tr}(\Gamma)=\tfrac32.$$
 
@@ -228,15 +239,16 @@ g(z) = c_0 h_4(z_0) + c_1 h_3(z_1)h_2(z_2) + c_2 h_4(z_2) + c_3 h_3(z_3)h_2(z_0)
 ### Choosing a target
 
 Subspace recovery is governed by the information exponent $p=\min\lbrace|\beta|:c_\beta\neq0\rbrace$ --
-the *lowest* degree present, not the highest. At $d=128$, $r=4$, $\alpha^{\ast}=1$:
+the *lowest* degree present, not the highest. **T1**-**T4** are the sweep targets of the [Introduction](#introduction). At $d=128$, $r=4$, $\alpha^{\ast}=1$:
 
-| terms | $p$ | $\max\lvert\beta\rvert$ | $n \gtrsim d^{p/2}/c_{\min}^2$ |
-|---|---|---|---|
-| `[{0: 1}, {0: 2}]` | 1 | 2 | 258 |
-| `[{0: 1}, {0: 1, 1: 1}]` | 1 | 2 | 258 |
-| `[{0: 2}]` | 2 | 2 | 2,916 |
-| `[{0: 2}, {0: 4}]` | 2 | 4 | 2,916 |
-| `[{0: 4}]` | 4 | 4 | 373,191 |
+| | terms | $p$ | $\max\lvert\beta\rvert$ | $n \gtrsim d^{p/2}/c_{\min}^2$ |
+|---|---|---|---|---|
+| **T1** | `[{0: 1}, {0: 2}]` | 1 | 2 | 258 |
+| **T2** | `[{0: 1}, {0: 1, 1: 1}]` | 1 | 2 | 258 |
+| | `[{0: 2}]` | 2 | 2 | 2,916 |
+| | `[{0: 2}, {0: 4}]` | 2 | 4 | 2,916 |
+| **T3** | `[{0: 4}]` | 4 | 4 | 373,191 |
+| **T4** | `[{0: 4}, {0: 2, 1: 2}]` | 4 | 4 | 373,191 |
 
 A low-degree term masks a high-degree one: `[{0:2},{0:4}]` costs the same as `[{0:2}]`.
 
