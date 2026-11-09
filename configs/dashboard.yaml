@@ -1,0 +1,172 @@
+# Interactive dashboard and videos, built by scripts/dashboard.py from finished W&B sweeps.
+#
+#   python scripts/dashboard.py                 # pull (cached), build pages + videos
+#   python scripts/dashboard.py --list          # the project's sweeps and groups
+#   python scripts/dashboard.py --upload        # also log pages and videos to one W&B run
+#
+# Text fields are Markdown with $...$ and $$...$$ LaTeX.
+
+title: Effect of width, data, parameterization and target on Subspace Recovery
+text: |
+  Each section is one W&B sweep. Its control bar acts as the run set for every panel in
+  the section: pick which axis colors the curves and filter the others. Every sweep
+  shares $d=128$, $r=4$, $n=2048$, width $m=512$, standard parameterization and the
+  target $g(z)=\sum_k\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$ with
+  $c_k\propto k^{-\alpha^{\ast}}$, except for the axis it varies. The learning rate is
+  relative, $\eta/\eta_{\text{crit}}$ with $\eta_{\text{crit}}=2/\lambda_{\max}(H)$ at
+  initialization, and every run takes 1000 GD steps.
+
+# The W&B project to read can also specify using --project ENTITY/PROJECT 
+# Without either the entity and project in configs/base.yaml are used.
+wandb: {entity: buchholzmd-team, project: agop-eigen-alignment}
+
+# Metric names before the W&B sections were reorganized (README, "W&B metrics")
+aliases:
+  nfa/mean_matched_alignment:     subspace/mean_matched_alignment
+  nfa/wasserstein1_nfm_agop:      spectrum/wasserstein1_nfm_agop
+  agop/agop_cosine:               nfa/agop_cosine
+  agop/agop_nuclear:              nfa/agop_nuclear
+  agop/nuclear_ratio:             nfa/nuclear_ratio
+  agop/agop_stable_rank:          nfa/agop_stable_rank
+  agop/agop_intrinsic_dim:        nfa/agop_intrinsic_dim
+  agop/agop_participation_ratio:  nfa/agop_participation_ratio
+  agop/stable_rank_ratio:         nfa/stable_rank_ratio
+  agop/intrinsic_dim_ratio:       nfa/intrinsic_dim_ratio
+  agop/participation_ratio_ratio: nfa/participation_ratio_ratio
+  agop/wasserstein1_agop_target:  spectrum/wasserstein1_agop_target
+  agop/mean_align_true:           subspace/mean_align_true
+  agop/rayleigh:                  spectrum/rayleigh
+  agop/rayleigh_ratio:            spectrum/rayleigh_ratio
+  agop/align_true:                subspace/align_true
+  agop/rank_true:                 subspace/rank_true    # never nfa/rank_true: those runs hold the inverse permutation
+
+# How sweep axes are shown. `labels` is a list (one per value, in the sweep's order) or a
+# {value: label} map; values without a label are shown as they are.
+axes:
+  optim.lr:               {name: "lr / η_crit", format: "{:.3f}"}
+  target.alpha:           {name: "α*"}
+  model.width:            {name: "width m"}
+  data.n:                 {name: "n"}
+  model.parameterization: {name: "parameterization"}
+  target.terms_index:
+    name: "target"
+    labels: ["h1 + h2 (p=1, additive)", "h1 + h1·h1 (p=1, interacting)",
+             "h4 (p=4, additive)", "h4 + h2·h2 (p=4, interacting)"]
+
+# The report's panel groups, shared by each section in groups of two columns. `id` identifies a
+# group (a video goes in <section id>/<group id>, e.g. width-sweep/generalization); `title` is
+# only its label.
+groups: &report_groups
+  - id: generalization
+    title: Generalization Performance
+    panels:
+      - metric: loss
+        title: Train Loss
+        log_y: true
+        text: $\frac1n\sum_i\big(f(x_i)-y_i\big)^2$ on the training inputs.
+      - metric: val_loss
+        title: Validation Loss
+        log_y: true
+        text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
+  - id: nfa
+    title: Neural Feature Ansatz
+    panels:
+      - metric: nfa/nfa_cosine
+        title: NFM/AGOP Cosine Similarity
+        text: $\cos(M,G_n)$, the Neural Feature Ansatz $M\propto G_n$.
+      - metric: nfa/nfm_cosine
+        title: NFM/Target AGOP Cosine Similarity
+        text: $\cos(M,G_n^{\ast})$.
+      - metric: nfa/mean_matched_alignment
+        title: NFM/AGOP Matched Eigenvector Alignment
+        text: $\frac1r\sum_X\langle m_{\sigma(X)},v_{n,X}\rangle^2$ with Hungarian matching $\sigma$.
+      - metric: nfa/wasserstein1_nfm_agop
+        title: NFM/AGOP Spectrum Wasserstein Distance
+        text: $W_1(M,G_n)$ between the normalized top-$r$ spectra.
+      - metric: agop/nuclear_ratio
+        title: AGOP to Target Nuclear Norm Ratio
+        text: $\mathrm{tr}(G_n)/\mathrm{tr}(G_n^{\ast})$, the network's gradient energy relative to the target's.
+      - metric: agop/participation_ratio_ratio
+        title: AGOP Eigenvalue Spread
+        text: $\mathrm{PR}(G_n)/\mathrm{PR}(G_n^{\ast})$, which is 1 when $G_n$ has the target's effective rank.
+  - id: subspace
+    title: Subspace Alignment
+    panels:
+      - metric: subspace/nfm_subspace_dist_sq
+        title: NFM Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_M$ and span($U$), from 0 to $r$.
+      - metric: subspace/agop_subspace_dist_sq
+        title: AGOP Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_{G_n}$ and span($U$), from 0 to $r$.
+      - metric: subspace/nfm_sin_max
+        title: NFM Sine Matrix Spectral Norm
+        text: $\sin\theta_r$ between $Q_M$ and span($U$), the worst-captured direction.
+      - metric: subspace/agop_sin_max
+        title: AGOP Sine Matrix Spectral Norm
+        text: $\sin\theta_r$ between $Q_{G_n}$ and span($U$).
+      - metric: subspace/nfm_mean_alignment
+        title: NFM Mean Index-Space Alignment
+        text: $\frac1r\sum_X\cos^2\theta_X$ between $Q_M$ and span($U$).
+      - metric: subspace/agop_mean_alignment
+        title: AGOP Mean Index-Space Alignment
+        text: $\frac1r\sum_X\cos^2\theta_X$ between $Q_{G_n}$ and span($U$).
+
+# Runs come from `<sweep>-sweep` (a W&B sweep name or id),
+# `group` W&B group of runs from the sweep. For several sweeps, the newest run is used;
+# `sweeps: all` combines them, keeping the newest run of each point. 
+# filters are the report's run-set filters, and every filter/axis can be changed in the page.
+sections:
+  - group: width-sweep
+    title: Width Sweep
+    text: Width $m\in\lbrace4,64,512,4096\rbrace$.
+    color_by: model.width
+    filters: {optim.lr: 0.786, target.alpha: 1}
+    groups: *report_groups
+  - group: dataset-sweep
+    title: Dataset Size Sweep
+    text: Training-set size $n\in\lbrace64,2048,65536\rbrace$, so $n/d$ runs from $0.5$ to $512$.
+    color_by: data.n
+    filters: {optim.lr: 0.786, target.alpha: 1}
+    groups: *report_groups
+  - group: parameterization-sweep
+    title: Parameterization Sweep
+    text: Standard, NTK, $\mu$P and spectral parameterizations at width $m=512$.
+    color_by: model.parameterization
+    filters: {optim.lr: 0.786, target.alpha: 1}
+    groups: *report_groups
+  - group: target-sweep
+    title: Target Sweep
+    text: Four link functions, crossing the information exponent $p\in\lbrace1,4\rbrace$ with additive against interacting terms.
+    color_by: target.terms_index
+    filters: {optim.lr: 0.786, target.alpha: 1}
+    groups: *report_groups
+
+# Videos: a grid with rows = metrics and cols = the values of one sweep axis, and one frame
+# per value of `time` (ascending when numeric). `fixed` must pin every other axis. Runs are
+# selected like a section's, or by `section` alone, which reads that section's runs. `section`
+# says where the video is shown: <section id>/<group id> puts it under that panel group,
+# <section id> at the end of the section; without `section`, it goes at the end of the section
+# reading the same runs.
+# A section's id is its `id:`, else its sweep or group name. `name` is optional (default: built
+# from the fields).
+videos:
+  - {section: width-sweep/generalization, rows: [loss, val_loss], cols: model.width, time: optim.lr, fixed: {target.alpha: 1}, name: width-generalization}
+  - {section: width-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.width,
+     time: optim.lr, fixed: {target.alpha: 1}, name: width-nfa}
+  - {section: width-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.width,
+     time: optim.lr, fixed: {target.alpha: 1}, name: width-subspace}
+  - {section: dataset-sweep/generalization, rows: [loss, val_loss], cols: data.n, time: optim.lr, fixed: {target.alpha: 1}, name: dataset-generalization}
+  - {section: dataset-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: data.n,
+     time: optim.lr, fixed: {target.alpha: 1}, name: dataset-nfa}
+  - {section: dataset-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: data.n,
+     time: optim.lr, fixed: {target.alpha: 1}, name: dataset-subspace}
+  - {section: parameterization-sweep/generalization, rows: [loss, val_loss], cols: model.parameterization, time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-generalization}
+  - {section: parameterization-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.parameterization,
+     time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-nfa}
+  - {section: parameterization-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.parameterization,
+     time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-subspace}
+  - {section: target-sweep/generalization, rows: [loss, val_loss], cols: target.terms_index, time: optim.lr, fixed: {target.alpha: 1}, name: target-generalization}
+  - {section: target-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: target.terms_index,
+     time: optim.lr, fixed: {target.alpha: 1}, name: target-nfa}
+  - {section: target-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: target.terms_index,
+     time: optim.lr, fixed: {target.alpha: 1}, name: target-subspace}
