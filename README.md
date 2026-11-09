@@ -8,6 +8,7 @@ __Contents__:
 - [Running on Fir](#running-on-fir)
 - [Specifying the target](#specifying-the-target)
 - [W&B metrics](#wb-metrics)
+- [Dashboard](#dashboard)
 - [Repository structure](#repository-structure)
 - [Running experiments](#running-experiments)
 - [Contact & attribution](#contact--attribution)
@@ -390,6 +391,30 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 - **`scaling/exponents`**: a table of every fit: $\beta$, $R^2$ and the width range it covers.
 - **`scaling/<y>_vs_model.width`**: the log-log plot of each fit, where $y$ is `loss_min`, `final_nfm_subspace_dist_sq` or `final_nuclear_ratio`.
 - **`beta__<y>__<parameterization>`**: each fitted $\beta$ as a summary scalar.
+
+## Dashboard
+
+`scripts/dashboard.py` turns finished W&B sweeps into interactive pages and videos, as `configs/dashboard.yaml` specifies. It runs locally and only reads runs: it never starts a sweep, an agent or any training. The one thing it can write to W&B is `--upload`.
+
+```bash
+python scripts/dashboard.py                      # pull the runs (cached), build the pages and videos
+python scripts/dashboard.py --no-videos          # pages only
+python scripts/dashboard.py --list [TEXT]        # the project's sweeps and groups, filtered by TEXT
+python scripts/dashboard.py --project ENT/PROJ   # read another project
+python scripts/dashboard.py --refresh            # re-download every run
+python scripts/dashboard.py --upload             # also log the pages and videos to one W&B run, sweep-dashboard
+open output/dashboard/dashboard.html             # view (macOS)
+```
+
+- **Project.** `--project`, else the spec's `wandb:` block, else `wandb.entity` and `wandb.project` in `configs/base.yaml`.
+- **Runs.** Each section and video names a `sweep` (by name or id), a `group`, or both. A `group` reads every sweep with runs in that W&B group and skips the group's runs that belong to no sweep, such as runs from before the sweeps. When several sweeps match, the one with the newest run is used and the others are printed; `sweeps: all` combines them, keeping the newest run of each point. `--list` shows what there is to choose from.
+- **Sections.** A section's control bar is the run set for all of its panels: one axis colors the curves, and each other axis is filtered to one value or to all of them. Panels plot one metric per run against the step, under a Markdown description that can contain LaTeX. Metrics are named as in [W&B metrics](#wb-metrics), and `aliases` maps a name, or the stem of an indexed family, to the one older runs logged.
+- **Videos** are grids with one row per metric and one column per value of a sweep axis, with one frame per value of another axis (ascending when numeric). `fixed` must pin every remaining axis. A video's `section` says where it is shown: `<section id>/<group id>` (e.g. `width-sweep/generalization`) puts it under that panel group, and `<section id>` at the end of the section. A video with only `section` reads that section's runs; without `section`, a video goes at the end of the section that reads the same runs. A panel group's `id` identifies it, and its `title` is only the label. Each frame shows the current curve, colored by its `regime`, over faint curves for the earlier frames.
+- **Comments.** Every panel, panel group, video and section has a "+ comment" box that takes Markdown with `$...$` LaTeX. Comments are kept in the browser (localStorage), shared by the combined and section pages. **Export comments** turns them into one Markdown file, to download or copy. It covers only what you commented on: each section's current run set, and each commented panel's title, description and a PNG of the plot as shown, followed by your comment; a commented video adds its current frame. The images are inlined as `data:` URIs, which VS Code, Obsidian and Typora render; GitHub does not.
+- **Checks.** The build stops before rendering anything if the spec does not fit its sweeps: an axis, filter value or `fixed` value that is not on the sweep, an unpinned video axis, or a repeated section id or video name. The message lists the valid values.
+- **Output** goes to `output/dashboard/`: `dashboard.html` (every section), `dashboard_<section>.html` (one section each) and `videos/*.mp4`. Every page is self-contained, with its data, libraries and videos inlined, so each opens directly in a browser and can be copied on its own. `--upload` logs each section page as a `wandb.Html` and each video as a `wandb.Video`.
+- **Resolution.** A page keeps, for each curve, its first and last steps, the minimum and maximum of each of 64 step ranges, and the edges of any stretch where it is not finite, each at its own step. So the extremes, such as catapult peaks, are exact and in the right place, and a diverged run's line stops where its values do. The videos use every step.
+- **Cache.** Runs are cached in `output/dashboard/cache/`. A run is fetched again when its state has changed or is not final, or when an edited alias makes a metric resolve to a different W&B key.
 
 ## Repository structure
 
