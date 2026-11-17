@@ -275,6 +275,8 @@ def log_run_to_wandb(out, run=None):
         # v_X for nfm_agop_align_dir.
         per_index = (
             ("nfa/nfm_agop_align_dir",  m["nfa_eigen_alignment"]["nfm_agop_alignment"], float),
+            ("nfa/matched_nfm_rank",    m["nfa_eigen_alignment"]["nfm_rank"],  int),
+            ("nfa/matched_agop_rank",   m["nfa_eigen_alignment"]["agop_rank"], int),
             ("agop/align_true",         m["target"]["align_true"],      float),
             ("agop/rank_true",          m["target"]["rank_true"],       int),
             ("agop/align_egop",         m["egop"]["align_egop"],        float),

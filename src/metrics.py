@@ -68,9 +68,12 @@ def nfa_cosine(state, **kwargs):
 def nfa_alignment(state, **kwargs):
     """The NFA at the level of eigenvectors and eigenspaces: the NFM vs top-r AGOP.
 
-    align_bases matches each top-r AGOP eigenvector to one of ALL the NFM's
-    eigenvectors, so an NFM eigenvector ranked below r can still be its match.
-    Matching individual eigenvectors is unstable when eigenvalues are tied. The
+    align_bases matches ALL d AGOP eigenvectors to ALL d NFM eigenvectors, and
+    the score is the mean overlap of the r best aligned pairs, so a pair can sit
+    at any rank of either spectrum. agop_rank / nfm_rank are where those pairs
+    sit, best aligned first: ranks above r - 1 mean the best aligned pairs are
+    not the strongest directions. Matching individual eigenvectors is unstable
+    when eigenvalues are tied. The
     nfm_agop_ entries are the subspace_recovery suite (principal angles) with
     the NFM eigenspace in place of span(U) as the frame and the AGOP
     eigenvectors as the directions: nfm_agop_alignment[X] is the fraction of
@@ -79,7 +82,13 @@ def nfa_alignment(state, **kwargs):
     """
     M = kwargs["nfm_eigs"]
     G = kwargs["agop_eigs"]
-    result = align_bases(M["all_eigvecs"], G["eigvecs"])
+    r = G["eigvecs"].shape[1]
+    alignment = align_bases(M["all_eigvecs"], G["all_eigvecs"])
+    overlap = alignment["overlap_matrix"][jnp.arange(alignment["perm"].shape[0]), alignment["perm"]]
+    nfm_rank = jnp.lexsort((alignment["perm"], -overlap))[:r]   # ties go to the stronger AGOP direction
+    result = {"score": overlap[nfm_rank].mean(),
+              "nfm_rank": nfm_rank,
+              "agop_rank": alignment["perm"][nfm_rank]}
     result.update({f"nfm_agop_{name}": value
                    for name, value in subspace_angles(M["eigvecs"], G["eigvecs"]).items()})
     result["nfm_agop_depth"] = subspace_depth(M["all_eigvecs"], G["eigvecs"])
