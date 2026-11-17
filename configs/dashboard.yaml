@@ -55,10 +55,12 @@ axes:
 
 # The report's panel groups, shared by each section in groups of two columns. `id` identifies a
 # group (a video goes in <section id>/<group id>, e.g. width-sweep/generalization); `title` is
-# only its label.
+# only its label. `preamble: true` opens the group with each panel's title and the README's
+# description of its metric ("W&B metrics"), copied word for word at every build.
 groups: &report_groups
   - id: generalization
     title: Generalization Performance
+    preamble: true
     panels:
       - metric: loss
         title: Train Loss
@@ -70,6 +72,7 @@ groups: &report_groups
         text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
   - id: nfa
     title: Neural Feature Ansatz
+    preamble: true
     panels:
       - metric: nfa/nfa_cosine
         title: NFM/AGOP Cosine Similarity
@@ -91,6 +94,7 @@ groups: &report_groups
         text: $\mathrm{PR}(G_n)/\mathrm{PR}(G_n^{\ast})$, which is 1 when $G_n$ has the target's effective rank.
   - id: subspace
     title: Subspace Alignment
+    preamble: true
     panels:
       - metric: subspace/nfm_subspace_dist_sq
         title: NFM Distance to Index-Space
@@ -140,6 +144,18 @@ sections:
     color_by: target.terms_index
     filters: {optim.lr: 0.786, target.alpha: 1}
     groups: *report_groups
+
+# Best runs, shown after the sections: for `metric` (any panel's), each section's best run among
+# those that pass `filters`, and how many of them reach `threshold`. `better` is the good side of
+# the threshold (below | above). All of these can be changed in the page. `filters` is
+# {column key: value}, e.g. {model.parameterization: standard, target.alpha: 0}. `columns`
+# ({key: header}) defaults to BEST_RUN_COLUMNS in scripts/dashboard.py; a key is a run-config key,
+# `regime`, or a panel's metric, shown at its last step.
+best_runs:
+  metric: subspace/nfm_subspace_dist_sq
+  better: below
+  threshold: 0.04
+  filters: {}
 
 # Videos: a grid with rows = metrics and cols = the values of one sweep axis, and one frame
 # per value of `time` (ascending when numeric). `fixed` must pin every other axis. Runs are

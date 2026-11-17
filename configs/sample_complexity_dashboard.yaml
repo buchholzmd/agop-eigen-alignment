@@ -1,0 +1,124 @@
+# The (d, n) dashboard, a fork of dashboard.yaml for configs/sample_complexity_sweep.yaml.
+#
+#   python scripts/dashboard.py --spec sample_complexity_dashboard.yaml
+#
+# It builds output/sample_complexity_dashboard/ and ends with the estimate of n*(d).
+
+title: Sample Complexity of Subspace Recovery
+text: |
+  One W&B sweep over the ambient dimension $d\in\lbrace32,64,128,256\rbrace$ and the
+  training-set size $n\in\lbrace2^9,\dots,2^{17}\rbrace$, at $r=4$, width $m=512$, standard
+  parameterization and the target
+  $g(z)=\sum_k\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$ with constant $c_k$
+  ($\alpha^{\ast}=0$). The learning rate is relative, $\eta/\eta_{\text{crit}}$ with
+  $\eta_{\text{crit}}=2/\lambda_{\max}(H)$ at initialization, and every run takes 5000 GD
+  steps. Points with $n/d>1024$ were not run. The page ends with $n^{\ast}(d)$, the smallest
+  $n$ at which the index space is recovered.
+
+wandb: {entity: buchholzmd-team, project: agop-eigen-alignment}
+
+axes:
+  optim.lr: {name: "lr / η_crit", format: "{:.1f}"}
+  data.d:   {name: "d"}
+  data.n:   {name: "n"}
+
+# The report's panel groups, shared by each section in groups of two columns. `id` identifies a
+# group (a video goes in <section id>/<group id>, e.g. width-sweep/generalization); `title` is
+# only its label. `preamble: true` opens the group with each panel's title and the README's
+# description of its metric ("W&B metrics"), copied word for word at every build.
+groups: &report_groups
+  - id: generalization
+    title: Generalization Performance
+    preamble: true
+    panels:
+      - metric: loss
+        title: Train Loss
+        log_y: true
+        text: $\frac1n\sum_i\big(f(x_i)-y_i\big)^2$ on the training inputs.
+      - metric: val_loss
+        title: Validation Loss
+        log_y: true
+        text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
+  - id: nfa
+    title: Neural Feature Ansatz
+    preamble: true
+    panels:
+      - metric: nfa/nfa_cosine
+        title: NFM/AGOP Cosine Similarity
+        text: $\cos(M,G_n)$, the Neural Feature Ansatz $M\propto G_n$.
+      - metric: nfa/nfm_cosine
+        title: NFM/Target AGOP Cosine Similarity
+        text: $\cos(M,G_n^{\ast})$.
+      - metric: nfa/mean_matched_alignment
+        title: NFM/AGOP Matched Eigenvector Alignment
+        text: $\frac1r\sum_X\langle m_{\sigma(X)},v_{n,X}\rangle^2$ with Hungarian matching $\sigma$.
+      - metric: nfa/wasserstein1_nfm_agop
+        title: NFM/AGOP Spectrum Wasserstein Distance
+        text: $W_1(M,G_n)$ between the normalized top-$r$ spectra.
+      - metric: agop/nuclear_ratio
+        title: AGOP to Target Nuclear Norm Ratio
+        text: $\mathrm{tr}(G_n)/\mathrm{tr}(G_n^{\ast})$, the network's gradient energy relative to the target's.
+      - metric: agop/participation_ratio_ratio
+        title: AGOP Eigenvalue Spread
+        text: $\mathrm{PR}(G_n)/\mathrm{PR}(G_n^{\ast})$, which is 1 when $G_n$ has the target's effective rank.
+  - id: subspace
+    title: Subspace Alignment
+    preamble: true
+    panels:
+      - metric: subspace/nfm_subspace_dist_sq
+        title: NFM Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_M$ and span($U$), from 0 to $r$.
+      - metric: subspace/agop_subspace_dist_sq
+        title: AGOP Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_{G_n}$ and span($U$), from 0 to $r$.
+      - metric: subspace/nfm_sin_max
+        title: NFM Sine Matrix Spectral Norm
+        text: $\sin\theta_r$ between $Q_M$ and span($U$), the worst-captured direction.
+      - metric: subspace/agop_sin_max
+        title: AGOP Sine Matrix Spectral Norm
+        text: $\sin\theta_r$ between $Q_{G_n}$ and span($U$).
+      - metric: subspace/nfm_mean_alignment
+        title: NFM Mean Index-Space Alignment
+        text: $\frac1r\sum_X\cos^2\theta_X$ between $Q_M$ and span($U$).
+      - metric: subspace/agop_mean_alignment
+        title: AGOP Mean Index-Space Alignment
+        text: $\frac1r\sum_X\cos^2\theta_X$ between $Q_{G_n}$ and span($U$).
+
+sections:
+  - group: sample-complexity-sweep
+    title: Sample Complexity Sweep
+    text: Dimension $d$ against training-set size $n$, so $n/d$ runs from $2$ to $1024$.
+    color_by: data.n
+    filters: {data.d: 128, optim.lr: 2.0}
+    groups: *report_groups
+
+# As in dashboard.yaml, with d and n in place of the parameters this sweep holds fixed.
+# `sample_complexity` adds, for each of its metrics, the grid of the best run's value at every
+# (d, n), n*(d) (the smallest n that reaches the threshold) and the fit n* = C d^beta. It uses
+# the threshold, `better` and filters above it, so with every lr it is the best lr's n*.
+best_runs:
+  metric: subspace/nfm_subspace_dist_sq
+  better: below
+  threshold: 0.04
+  filters: {}
+  columns:
+    data.d: "$d$"
+    data.n: "$n$"
+    optim.lr: lr ratio
+    lr_absolute: lr absolute
+    eta_crit: "$\\eta_{\\text{crit}}$"
+    regime: regime
+    subspace/nfm_subspace_dist_sq: NFM
+    subspace/agop_subspace_dist_sq: AGOP
+    loss: train loss
+    val_loss: val loss
+  sample_complexity: [subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq]
+
+# One column per d and one frame per n, at the lr the best standard runs sat near.
+videos:
+  - {section: sample-complexity-sweep/generalization, rows: [loss, val_loss], cols: data.d, time: data.n,
+     fixed: {optim.lr: 2.0}, name: sample-complexity-generalization}
+  - {section: sample-complexity-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop],
+     cols: data.d, time: data.n, fixed: {optim.lr: 2.0}, name: sample-complexity-nfa}
+  - {section: sample-complexity-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max],
+     cols: data.d, time: data.n, fixed: {optim.lr: 2.0}, name: sample-complexity-subspace}

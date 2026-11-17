@@ -1,0 +1,34 @@
+extends: base.yaml
+name: sample-complexity-sweep
+
+# A (d, n) grid for the sample-complexity law n*(d): for each d, the smallest n at
+# which the NFM and AGOP eigenspaces recover span(U). Everything else is the other
+# sweeps' baseline at alpha = 0, the easier of their two values.
+data:   {n: 2048, d: 128, r: 4, noise: 0.001, normalize: none, seed: 33}
+model:  {depth: 2, parameterization: standard, width: 512}
+target: {basis: hermite, normalize: true, alpha: 0.0, terms: [{0: 1}, {0: 2}]}
+# 5000 steps: the n=65536 runs of dataset-sweep were still recovering at step 1000.
+optim:  {lr_mode: relative, steps: 5000}
+metrics: {num_power_iters: 30, every: 1}
+
+sweep:
+  data.d: [32, 64, 128, 256]
+  data.n: [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+
+# The best standard-parameterization runs so far sit at 1.5-3.3 eta_crit; 0.5 and 1.0
+# are the no-catapult controls.
+lr_scan: {values: linspace, lo: 0.5, hi: 3.0, num: 6}
+
+limits:
+  max_params: 100000000
+  max_act_bytes: 4000000000
+  max_n_times_m: 1000000000
+  min_capacity: 0.5
+  max_capacity: 1024      # n/d: closes d=32 at n >= 65536 and d=64 at n = 131072
+
+slurm:
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "6:00:00"
+  array: "0-15%16"

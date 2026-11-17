@@ -76,7 +76,7 @@ and the eigenvector for $\lambda$ has components proportional to $c_k/(\lambda-c
 \Gamma=\frac1{410}\begin{pmatrix}432&72&48&36\\72&108&24&18\\48&24&48&12\\36&18&12&27\end{pmatrix}
 ```
 
-with eigenvalues $\approx(1.116,0.238,0.095,0.050)$. Each eigenvector $v_X^{\ast}$ of $G^{\ast}$ stays close to its own direction, $\langle v_X^{\ast},u_X\rangle^2\approx(0.93,0.86,0.85,0.91)$ for $X=1,\dots,4$ (W&B keys 0 to 3). Still, $\Gamma_{XX}/\lambda_X^{\ast}\approx(0.94,1.11,1.23,1.32)$ rather than 1, and that is what `rayleigh_ratioX` would read for a network whose AGOP equals the target EGOP. With $\alpha^{\ast}=0$ the same ratios are $\frac3{r+2}$ for $X=1$ and $\frac32$ for the rest.
+with eigenvalues $\approx(1.116,0.238,0.095,0.050)$. Each eigenvector $v_X^{\ast}$ of $G^{\ast}$ stays close to its own direction, $\langle v_X^{\ast},u_X\rangle^2\approx(0.93,0.86,0.85,0.91)$ for $X=1,\dots,4$ (W&B keys 0 to 3). Still, $\Gamma_{XX}/\lambda_X^{\ast}\approx(0.94,1.11,1.23,1.32)$ rather than 1, so any metric dividing by $\lambda_X^{\ast}$ is off by that much even for a network whose AGOP equals the target's. `strength_ratioX` avoids it by dividing by $\Gamma_{XX}/\mathrm{Tr}\Gamma$, which is defined whether or not $u_X$ is an eigenvector.
 
 **Sample against population.** The target's AGOP on the training inputs is $G_n^{\ast}=U^\top\Gamma_n U$ with $\Gamma_n=\frac1n\sum_i\nabla g(Ux_i)\nabla g(Ux_i)^\top$, and $\Gamma_n\to\Gamma$ as $n\to\infty$. The two matrices share the subspace span($U$) and differ only in this $r\times r$ core. So the sample shows up in eigenvalues, and in eigenvectors within span($U$), but never in the subspace itself, as long as $\Gamma_n$ has full rank.
 
@@ -327,8 +327,6 @@ The learned AGOP $G_n$ alone and against the target: its AGOP $G_n^{\ast}$ on th
 - **`agop_egop_spectral_dist`**: $\Vert G_n-G^{\ast}\Vert_2/\Vert G^{\ast}\Vert_2$, the largest $|\lambda(G_n-G^{\ast})|$ relative to $\lambda_{\max}(G^{\ast})$. Unlike `agop_egop_frobenius_dist`, it measures the worst single direction rather than the mismatch summed over all of them. For $d\le2048$ the numerator is exact, $\max|\lambda(C)|$ from one dense eigendecomposition of $C$. Above that it is $\sqrt{\lambda_{\max}(C^\top C)}$ from 50 × `metrics.num_power_iters` steps of power iteration.
 - **`mean_align_true`**: the mean of `align_trueX`. When target eigenvalues are tied (e.g. `target.alpha: 0` with the same degree in every direction), sampling noise picks $v_{n,X}^{\ast}$ within span($U$), so this is noise; use the principal-angle metrics in `subspace/` for those targets instead.
 - **`mean_align_egop`**: the mean of `align_egopX`. Unlike `mean_align_true`, its reference is $G^{\ast}$, so the training sample does not move it. It is still noise where eigenvalues of $G^{\ast}$ are tied, as for the sweep target with $\alpha^{\ast}=0$ (see [Target EGOP](#target-egop)).
-- **`rayleighX`**: $u_X^\top Gu_X$, the learned AGOP's energy along target direction X; X indexes the rows $u_X$ of $U$. Unlike `rayleigh_ratioX`, it is not normalized by the target.
-- **`rayleigh_ratioX`**: `rayleighX` divided by $\lambda_{n,X}^{\ast}$; X indexes the target direction $u_X$ in the numerator and the X-th largest target eigenvalue in the denominator. That denominator equals $u_X^\top G_n^{\ast}u_X$, making 1 mean "matched", only when $G_n^{\ast}$ is diagonal in the $U$ basis with eigenvalues decreasing in X; product terms, linear terms in more than one direction (as in the sweep target `[{0: 1}, {0: 2}]`; see [Target EGOP](#target-egop)) or cycled degrees can break this.
 - **`align_trueX`**: $\langle v_{n,\sigma(X)},v_{n,X}^{\ast}\rangle^2$ with $\sigma=\sigma_{v_n,v_n^{\ast}}$; X indexes the target-AGOP eigenvectors $v_{n,X}^{\ast}$ ("true" means an eigenvector of $G_n^{\ast}$, not a row of $U$). Unlike `rank_trueX`, it says how well $v_{n,X}^{\ast}$ is matched, not by which learned eigenvector.
 - **`rank_trueX`**: $\sigma(X)$, the index of the learned-AGOP eigenvector matched to $v_{n,X}^{\ast}$; X indexes $v_{n,X}^{\ast}$. It reads X when $G_n$ orders the directions as $G_n^{\ast}$ does. Runs logged under the old key `nfa/rank_trueX` hold the inverse permutation instead.
 - **`align_egopX`**: $\langle v_{n,\sigma(X)},v_X^{\ast}\rangle^2$ with $\sigma=\sigma_{v_n,v^{\ast}}$; X indexes the eigenvectors $v_X^{\ast}$ of $G^{\ast}$. Unlike `align_trueX`, the reference is the population EGOP rather than the target's AGOP on the training inputs.
@@ -336,7 +334,7 @@ The learned AGOP $G_n$ alone and against the target: its AGOP $G_n^{\ast}$ on th
 
 ### `subspace/`
 
-The top-$r$ eigenspaces of the learned $M$ and $G_n$ against the target subspace span($U$).
+The learned $M$ and $G_n$ against the target subspace span($U$), by eigenvectors (`alignment`, which ignores eigenvalues) and by energy (`strength`, which is eigenvalue-weighted).
 
 - **`nfm_mean_alignment`**: $\frac1r\sum_X\cos^2\theta_X$, the mean of `align_dirX`, which is 1 iff the subspace is recovered.
 - **`nfm_cos_max`**: $\cos\theta_1$, i.e. how well the best-captured direction is recovered. It has no AGOP counterpart only because `log_run_to_wandb` doesn't log one: `subspace_recovery` ([src/metrics.py](src/metrics.py)) computes `agop_cos_max` and per-direction AGOP alignments as well.
@@ -346,6 +344,10 @@ The top-$r$ eigenspaces of the learned $M$ and $G_n$ against the target subspace
 - **`agop_sin_max`**: `nfm_sin_max` for $Q_{G_n}$.
 - **`agop_subspace_dist_sq`**: `nfm_subspace_dist_sq` for $Q_{G_n}$. Compared with `nfm_subspace_dist_sq`, it shows whether the AGOP or the weights find the subspace first.
 - **`align_dirX`**: $\Vert Q_M^\top u_X\Vert^2\in[0,1]$, the fraction of target direction X inside the NFM's top-$r$ eigenspace; X indexes the rows $u_X$ of $U$. It is logged for the NFM only.
+- **`nfm_strength_ratioX`**: $\dfrac{u_X^\top Mu_X/\mathrm{Tr}M}{u_X^\top G_n^{\ast}u_X/\mathrm{Tr}G_n^{\ast}}$, the NFM's share of energy along target direction X over the target AGOP's share of the same direction, so 1 means matched; X indexes the rows $u_X$ of $U$. Unlike `align_dirX` it is eigenvalue-weighted and reads the whole spectrum rather than the top-$r$ eigenspace. The denominator needs no eigenvector correspondence, unlike $\lambda_{n,X}^{\ast}$, and is logged once per run as `target_strengthX`. $\mathrm{Tr}$ is the only scale-free denominator whose baseline does not move with width: at an isotropic initialization $u_X^\top Mu_X/\mathrm{Tr}M=1/d$ at every $m$, where $\lambda_{\max}(M)$ and $\Vert M\Vert_F$ give $0.024\to0.730$ and $0.015\to0.087$ over $m=4\dots4096$ at $d=128$.
+- **`agop_strength_ratioX`**: `nfm_strength_ratioX` for $G_n$.
+- **`nfm_total_strength`**: $\mathrm{Tr}(UMU^\top)/\mathrm{Tr}M$, the fraction of the NFM inside span($U$), from $r/d$ at initialization to 1. Unlike the mean of `nfm_strength_ratioX` it sums the unnormalized shares, so it does not depend on the target's spectrum. Rising `nfm_mean_alignment` with flat `nfm_total_strength` is the top eigenvectors turning toward span($U$) without span($U$) gaining any of the mass.
+- **`agop_total_strength`**: `nfm_total_strength` for $G_n$. It is 1 for the target AGOP, which has no energy outside span($U$).
 
 ### `slices/`
 
@@ -382,6 +384,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 - **`eos_first_step`**: the first step with `sharpness_ratio` ≥ 1, or −1 if the run never reaches EOS.
 - **`eos_fraction`**: the fraction of steps with `sharpness_ratio` ≥ 1.
 - **`infeasible`**: on sweep runs tagged `infeasible` only, the `limits:` check the cell failed. These runs have no other metrics.
+- **`target_strengthX`**: $u_X^\top G_n^{\ast}u_X/\mathrm{Tr}G_n^{\ast}$, the denominator of `subspace/{nfm,agop}_strength_ratioX`. Constant over a run, and sums to 1 over X.
 - **`final_<metric>`**: the last-step value of `subspace/{nfm,agop}_{mean_alignment,subspace_dist_sq}` and `agop/{agop_cosine,mean_align_true,nuclear_ratio,intrinsic_dim_ratio,stable_rank_ratio}`.
 
 ### Aggregate run
@@ -399,6 +402,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 ```bash
 python scripts/dashboard.py                      # pull the runs (cached), build the pages and videos
 python scripts/dashboard.py --no-videos          # pages only
+python scripts/dashboard.py --spec sample_complexity_dashboard.yaml   # the (d, n) dashboard
 python scripts/dashboard.py --list [TEXT]        # the project's sweeps and groups, filtered by TEXT
 python scripts/dashboard.py --project ENT/PROJ   # read another project
 python scripts/dashboard.py --refresh            # re-download every run
@@ -408,13 +412,15 @@ open output/dashboard/dashboard.html             # view (macOS)
 
 - **Project.** `--project`, else the spec's `wandb:` block, else `wandb.entity` and `wandb.project` in `configs/base.yaml`.
 - **Runs.** Each section and video names a `sweep` (by name or id), a `group`, or both. A `group` reads every sweep with runs in that W&B group and skips the group's runs that belong to no sweep, such as runs from before the sweeps. When several sweeps match, the one with the newest run is used and the others are printed; `sweeps: all` combines them, keeping the newest run of each point. `--list` shows what there is to choose from.
-- **Sections.** A section's control bar is the run set for all of its panels: one axis colors the curves, and each other axis is filtered to one value or to all of them. Panels plot one metric per run against the step, under a Markdown description that can contain LaTeX. Metrics are named as in [W&B metrics](#wb-metrics), and `aliases` maps a name, or the stem of an indexed family, to the one older runs logged.
+- **Sections.** A section's control bar is the run set for all of its panels: one axis colors the curves, and each other axis is filtered to one value or to all of them. Panels plot one metric per run against the step, under a Markdown description that can contain LaTeX. Metrics are named as in [W&B metrics](#wb-metrics), and `aliases` maps a name, or the stem of an indexed family, to the one older runs logged. A panel group with `preamble: true` opens with a list of its panels, each with its title, metric and that metric's description copied word for word from [W&B metrics](#wb-metrics) at build time; a metric that section doesn't describe is left out, with a warning.
 - **Videos** are grids with one row per metric and one column per value of a sweep axis, with one frame per value of another axis (ascending when numeric). `fixed` must pin every remaining axis. A video's `section` says where it is shown: `<section id>/<group id>` (e.g. `width-sweep/generalization`) puts it under that panel group, and `<section id>` at the end of the section. A video with only `section` reads that section's runs; without `section`, a video goes at the end of the section that reads the same runs. A panel group's `id` identifies it, and its `title` is only the label. Each frame shows the current curve, colored by its `regime`, over faint curves for the earlier frames.
+- **Best runs.** A spec with `best_runs:` ends the page with a table of each section's best run for one `metric`, among the runs that pass `filters` and did not diverge, and how many of them reach `threshold`; `better` says whether below or above the threshold is good. The metric, threshold, side and filters can be changed in the page. `columns` defaults to $n$, $m$, parameterization, $\alpha^{\ast}$, target, lr ratio, absolute lr, $\eta_{\text{crit}}$, regime, the NFM and AGOP distances, and the train and validation losses.
+- **Sample complexity.** `best_runs.sample_complexity` lists metrics, and for each adds the grid of the best run's last value at every $(d, n)$, the estimate $n^{\ast}(d)$ (the smallest $n$ that reaches the threshold, interpolated in $\log n$ around the crossing) and the least-squares fit $n^{\ast}\approx C d^{\beta}$. `configs/sample_complexity_dashboard.yaml` does this for `sample_complexity_sweep.yaml`.
 - **Comments.** Every panel, panel group, video and section has a "+ comment" box that takes Markdown with `$...$` LaTeX. Comments are kept in the browser (localStorage), shared by the combined and section pages. **Export comments** turns them into one Markdown file, to download or copy. It covers only what you commented on: each section's current run set, and each commented panel's title, description and a PNG of the plot as shown, followed by your comment; a commented video adds its current frame. The images are inlined as `data:` URIs, which VS Code, Obsidian and Typora render; GitHub does not.
 - **Checks.** The build stops before rendering anything if the spec does not fit its sweeps: an axis, filter value or `fixed` value that is not on the sweep, an unpinned video axis, or a repeated section id or video name. The message lists the valid values.
-- **Output** goes to `output/dashboard/`: `dashboard.html` (every section), `dashboard_<section>.html` (one section each) and `videos/*.mp4`. Every page is self-contained, with its data, libraries and videos inlined, so each opens directly in a browser and can be copied on its own. `--upload` logs each section page as a `wandb.Html` and each video as a `wandb.Video`.
+- **Output** goes to `output/<spec name>/`, so `output/dashboard/` for `dashboard.yaml`: `dashboard.html` (every section), `dashboard_<section>.html` (one section each) and `videos/*.mp4`. Every page is self-contained, with its data, libraries and videos inlined, so each opens directly in a browser and can be copied on its own. `--upload` logs each section page as a `wandb.Html` and each video as a `wandb.Video`.
 - **Resolution.** A page keeps, for each curve, its first and last steps, the minimum and maximum of each of 64 step ranges, and the edges of any stretch where it is not finite, each at its own step. So the extremes, such as catapult peaks, are exact and in the right place, and a diverged run's line stops where its values do. The videos use every step.
-- **Cache.** Runs are cached in `output/dashboard/cache/`. A run is fetched again when its state has changed or is not final, or when an edited alias makes a metric resolve to a different W&B key.
+- **Cache.** Runs are cached in `output/dashboard/cache/`, shared by every spec. A run is fetched again when its state has changed or is not final, or when an edited alias makes a metric resolve to a different W&B key.
 
 ## Repository structure
 

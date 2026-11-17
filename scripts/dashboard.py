@@ -9,19 +9,22 @@ single run named sweep-dashboard.
 
     python scripts/dashboard.py                      # pull (cached), build pages + videos
     python scripts/dashboard.py --no-videos          # pages only
+    python scripts/dashboard.py --spec sample_complexity_dashboard.yaml   # another spec in configs/
     python scripts/dashboard.py --refresh            # re-download every run
     python scripts/dashboard.py --list [TEXT]        # list the project's sweeps and groups, then exit
     python scripts/dashboard.py --project ENT/PROJ   # read another project than the spec's
     python scripts/dashboard.py --upload             # also log the pages and videos to W&B
 
-Output, in output/dashboard/:
+Output, in output/<spec name>/ (output/dashboard/ for dashboard.yaml):
     dashboard.html               every section, with its videos
     dashboard_<section>.html     one section per page, for W&B's HTML panel
     videos/<name>.mp4            rows = metrics, cols = one sweep axis, frames = another
 
 Every page is self-contained: its data, libraries (uPlot, marked, MathJax) and videos are
 inlined. A section's control bar is the run set for all of its panels: one axis colors the
-curves, and every other axis is filtered to one value or to "all".
+curves, and every other axis is filtered to one value or to "all". A spec with `best_runs:`
+ends the page with each section's best run for one metric and, with `sample_complexity:`, the
+estimate of n*(d).
 """
 import argparse, base64, hashlib, json, os, re, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +54,14 @@ VENDOR = {
 BUCKETS = 64
 TERMINAL = {"finished", "crashed", "failed", "killed"}
 REGIME_COLORS = {"monotonic": "#5aa9e6", "catapult": "#f5a623", "diverged": "#e5534b"}
+# The best-runs table's default columns, {key: header}. A key is a run-config key, `regime`, or
+# a panel's metric, shown at its last step.
+BEST_RUN_COLUMNS = {
+    "data.n": "$n$", "model.width": "$m$", "model.parameterization": "param",
+    "target.alpha": r"$\alpha^\ast$", "target.terms": "target", "optim.lr": "lr ratio",
+    "lr_absolute": "lr absolute", "eta_crit": r"$\eta_{\text{crit}}$", "regime": "regime",
+    "subspace/nfm_subspace_dist_sq": "NFM", "subspace/agop_subspace_dist_sq": "AGOP",
+    "loss": "train loss", "val_loss": "val loss"}
 
 
 # ----------------------------------------------------------------------------- W&B
@@ -136,7 +147,7 @@ def resolve_sweeps(api, entity, project, source):
 
 def resolve(key, logged, aliases):
     """The W&B key a run logged `key` under: the key itself, else its alias, else for an
-    indexed key such as agop/rayleigh_ratio2 the alias of its stem plus the index."""
+    indexed key such as subspace/nfm_strength_ratio2 the alias of its stem plus the index."""
     if key in logged:
         return key
     if aliases.get(key) in logged:
@@ -210,7 +221,8 @@ def pull(api, entity, project, source, metrics, aliases, cache_root, refresh, wo
         cache_dir = os.path.join(cache_root, s.id)
         os.makedirs(cache_dir, exist_ok=True)
         with ThreadPoolExecutor(workers) as pool:
-            runs += pool.map(lambda r: fetch_run(r, axes, metrics, aliases, cache_dir, refresh), listed)
+            runs += pool.map(lambda r: {**fetch_run(r, axes, metrics, aliases, cache_dir, refresh),
+                                        "config": dict(r.config)}, listed)
     newest = {}
     for r in runs:
         point = tuple(value_index(axes[k], r["axes"].get(k)) for k in axes)
@@ -344,6 +356,11 @@ def check_spec(spec, pulled):
                 on_axis(where, axes, k, v)
             elif k not in axes:
                 raise SystemExit(f"{where}: {k!r} is not an axis of its sweeps; axes: {list(axes)}")
+    undescribed = {(group_id(g), p["metric"]) for s in spec["sections"] for g in s["groups"]
+                   if g.get("preamble") for p in g["panels"] if p["metric"] not in readme_metrics()}
+    for gid, metric in sorted(undescribed):
+        print(f"warning: panel group {gid!r}: the README's \"W&B metrics\" has no description of "
+              f"{metric!r}, so its preamble leaves it out", flush=True)
     names = []
     sections = {section_id(s): s for s in spec["sections"]}
     paths = [f"{sid}/{group_id(g)}" for sid, s in sections.items() for g in s["groups"]]
@@ -407,6 +424,57 @@ def b64(a):
     return base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
 
 
+_readme_metrics = None
+
+
+def readme_metrics():
+    """{metric key: description}, verbatim from the README's "W&B metrics" section: every
+    "- **`name`**: description" bullet, keyed with the prefix of the "### `prefix/`" heading above
+    it, or none before the first heading. Bullets under other headings (run config, run summary)
+    are left out."""
+    global _readme_metrics
+    if _readme_metrics is None:
+        _readme_metrics, prefix, inside = {}, "", False
+        for line in open(os.path.join(ROOT, "README.md"), encoding="utf-8"):
+            line = line.rstrip("\n")
+            if line.startswith("## "):
+                inside, prefix = line.strip() == "## W&B metrics", ""
+            elif inside and line.startswith("### "):
+                m = re.fullmatch(r"### `([^`]+/)`\s*", line)
+                prefix = m.group(1) if m else None
+            elif inside and prefix is not None:
+                m = re.match(r"- \*\*`([^`]+)`\*\*: (.*)", line)
+                if m:
+                    _readme_metrics[prefix + m.group(1)] = m.group(2)
+    return _readme_metrics
+
+
+def group_text(group):
+    """A panel group's text, then, with `preamble: true`, each panel's title and metric with the
+    README's description of it."""
+    text = group.get("text", "")
+    if group.get("preamble"):
+        described = readme_metrics()
+        items = [f"- **{p.get('title', p['metric'])}** (`{p['metric']}`): {described[p['metric']]}"
+                 for p in group["panels"] if p["metric"] in described]
+        text = "\n\n".join(t for t in (text, "\n".join(items)) if t)
+    return text
+
+
+def table_value(run, key):
+    """A run's entry in the best-runs table: a metric at its last step (None unless finite), its
+    regime, or its config value, with target.terms written as the sum of products it stands for."""
+    if key in run["curves"]:
+        y = run["curves"][key]
+        return float(y[-1]) if len(y) and np.isfinite(y[-1]) else None
+    if key == "regime":
+        return run.get("regime")
+    value = run["config"].get(key)
+    if key == "target.terms" and value:
+        return " + ".join("·".join(f"h{degree}" for degree in term.values()) for term in value)
+    return value
+
+
 def section_payload(spec, sec, axes, runs, videos):
     title = sec.get("title", section_id(sec))
     metas = [axis_meta(spec, k, v) for k, v in axes.items()]
@@ -434,11 +502,14 @@ def section_payload(spec, sec, axes, runs, videos):
         if m["key"] != sec["color_by"]:
             v = (sec.get("filters") or {}).get(m["key"], "all")
             filters[m["key"]] = "all" if v == "all" else value_index(m["values"], v)
+    columns = (spec.get("best_runs") or {}).get("columns", BEST_RUN_COLUMNS)
+    table = {k: [table_value(runs[i], k) for i in keep]
+             for k in dict.fromkeys([*columns, *metrics, "data.d", "data.n"])}
     return {"id": section_id(sec), "title": title, "text": sec.get("text", ""),
             "axes": metas, "runs": [index[i] for i in keep], "steps": int(steps),
-            "step_bytes": 2 if step_dtype == "<u2" else 4, "metrics": metrics,
+            "step_bytes": 2 if step_dtype == "<u2" else 4, "metrics": metrics, "table": table,
             "regimes": [runs[i].get("regime") for i in keep],
-            "groups": [{**g, "id": group_id(g)} for g in sec["groups"]],
+            "groups": [{**g, "id": group_id(g), "text": group_text(g)} for g in sec["groups"]],
             "defaults": {"color_by": sec["color_by"], "filters": filters}, "videos": videos}
 
 
@@ -467,8 +538,9 @@ def vendor(cache_root):
     return out
 
 
-def write_page(path, title, text, sections, libs):
-    data = json.dumps({"title": title, "text": text, "sections": sections}).replace("</", "<\\/")
+def write_page(path, title, text, sections, best_runs, libs):
+    data = json.dumps({"title": title, "text": text, "sections": sections,
+                       "best_runs": best_runs}).replace("</", "<\\/")
     html = (PAGE.replace("{{TITLE}}", title).replace("{{UPLOT_CSS}}", libs["uplot.css"])
                 .replace("{{UPLOT_JS}}", libs["uplot.js"]).replace("{{MARKED_JS}}", libs["marked.js"])
                 .replace("{{MATHJAX_JS}}", libs["mathjax.js"]).replace("{{DATA}}", data))
@@ -643,8 +715,9 @@ def main():
         list_sweeps(api, entity, project, a.list)
         return
 
-    outdir = a.outdir or os.path.join(ROOT, get_in(base, "paths.outputs"), "dashboard")
-    cache = os.path.join(outdir, "cache")
+    outputs = os.path.join(ROOT, get_in(base, "paths.outputs"))
+    outdir = a.outdir or os.path.join(outputs, os.path.splitext(os.path.basename(a.spec))[0])
+    cache = os.path.join(outputs, "dashboard", "cache")       # shared by every spec
     os.makedirs(os.path.join(outdir, "videos"), exist_ok=True)
     aliases = spec.get("aliases") or {}
     titles = {p["metric"]: p for g in spec.get("groups") or [] for p in g["panels"]}
@@ -689,6 +762,9 @@ def main():
             videos.setdefault(target, []).append(info)
 
     libs = vendor(os.path.join(cache, "vendor"))
+    best_runs = spec.get("best_runs")
+    if best_runs:
+        best_runs = {"better": "below", "filters": {}, "columns": BEST_RUN_COLUMNS, **best_runs}
     sections, pages = [], {}
     for sec in spec["sections"]:
         payload = section_payload(spec, sec, *pulled[source_key(sec)],
@@ -696,9 +772,10 @@ def main():
                                    for v in videos.get(section_id(sec), [])])
         sections.append(payload)
         page = os.path.join(outdir, f"dashboard_{payload['id']}.html")
-        write_page(page, f"{spec['title']}: {payload['title']}", "", [payload], libs)
+        write_page(page, f"{spec['title']}: {payload['title']}", "", [payload], best_runs, libs)
         pages[payload["id"]] = page
-    write_page(os.path.join(outdir, "dashboard.html"), spec["title"], spec.get("text", ""), sections, libs)
+    write_page(os.path.join(outdir, "dashboard.html"), spec["title"], spec.get("text", ""), sections,
+               best_runs, libs)
 
     if a.upload:
         run = wandb.init(entity=entity, project=project, name="sweep-dashboard", group="dashboard",
@@ -732,8 +809,12 @@ nav { display:flex; gap:14px; flex-wrap:wrap; margin:8px 0 0; font-size:13px; }
             border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:10px 0 4px;
             display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; }
 .controls label { color:var(--muted); font-size:12px; display:flex; gap:6px; align-items:center; }
-select { background:var(--raised); color:var(--text); border:1px solid var(--border);
-         border-radius:6px; padding:3px 6px; font-size:13px; }
+select, input { background:var(--raised); color:var(--text); border:1px solid var(--border);
+                border-radius:6px; padding:3px 6px; font-size:13px; }
+input { width:90px; }
+table.best { border-collapse:collapse; font-size:12px; margin:8px 0 14px; display:block; overflow-x:auto; }
+table.best th, table.best td { border:1px solid var(--border); padding:3px 8px; text-align:right; white-space:nowrap; }
+table.best th { color:var(--muted); font-weight:600; } table.best b.ok { color:#7ee787; }
 .legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; color:var(--muted); width:100%; }
 .legend span i { display:inline-block; width:14px; height:3px; margin-right:5px; vertical-align:middle; border-radius:2px; }
 .count { font-size:12px; color:var(--muted); margin-left:auto; }
@@ -1057,6 +1138,88 @@ function Section(sec, root) {
     charts.forEach(({ u, el }) => u.setSize({ width: Math.max(el.clientWidth, 200), height: 210 })), 150); });
 }
 
+// Best runs. For one metric, each section's best run among those that pass the filters, and how
+// many of them reach the threshold. With `sample_complexity`, also n*(d) for each of its metrics:
+// per d, the smallest n whose best run reaches the threshold.
+function BestRuns(cfg, root) {
+  const secs = DATA.sections, titles = {};
+  secs.forEach(s => s.groups.forEach(g => g.panels.forEach(p => { if (s.table[p.metric]) titles[p.metric] = p.title; })));
+  const show = v => v == null ? '–' : typeof v !== 'number' || Number.isInteger(v) ? String(v)
+    : Math.abs(v) < 1e-3 ? v.toExponential(2) : String(+v.toPrecision(4));
+  const state = { metric: cfg.metric, below: cfg.better !== 'above', threshold: cfg.threshold,
+                  filters: Object.fromEntries(Object.entries(cfg.filters).map(([k, v]) => [k, show(v)])) };
+  // The parameters to filter on: the columns that some section sweeps.
+  const params = Object.keys(cfg.columns).filter(k => secs.some(s => s.axes.some(a => a.key === k || a.key === k + '_index')));
+  const reaches = v => v != null && (state.below ? v <= state.threshold : v >= state.threshold);
+  const mark = v => reaches(v) ? `<b class="ok">${show(v)}</b>` : show(v);
+  // A section's runs that pass the filters, did not diverge and logged the metric, best first.
+  function ranked(s, metric) {
+    const y = s.table[metric] || [];
+    return y.map((v, i) => i).filter(i => y[i] != null && s.regimes[i] !== 'diverged' &&
+        Object.entries(state.filters).every(([k, f]) => f === 'all' || show((s.table[k] || [])[i]) === f))
+      .sort((i, j) => state.below ? y[i] - y[j] : y[j] - y[i]);
+  }
+  const table = (head, rows) => '<table class="best"><tr>' + head.map(h => `<th>${h}</th>`).join('') + '</tr>'
+    + rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('') + '</table>';
+
+  const wrap = el('section'); wrap.id = 'best-runs'; root.appendChild(wrap);
+  wrap.appendChild(el('h2', null, 'Best runs'));
+  const bar = el('div', 'controls'), out = el('div'); wrap.append(bar, out);
+  function choice(name, options, value, set) {
+    const l = el('label', null, esc(name)), s = el('select');
+    options.forEach(([v, text]) => s.add(new Option(text, v, false, v === value)));
+    s.onchange = () => { set(s.value); render(); }; l.appendChild(s); bar.appendChild(l);
+  }
+  choice('metric', Object.entries(titles), state.metric, v => state.metric = v);
+  choice('better', [['below', 'below the threshold'], ['above', 'above the threshold']],
+         state.below ? 'below' : 'above', v => state.below = v === 'below');
+  { const l = el('label', null, 'threshold'), t = el('input'); t.type = 'number'; t.step = 'any'; t.value = state.threshold;
+    t.oninput = () => { state.threshold = +t.value; render(); }; l.appendChild(t); bar.appendChild(l); }
+  params.forEach(k => {
+    const values = [...new Set(secs.flatMap(s => s.table[k]))].filter(v => v != null)
+      .sort((a, b) => typeof a === 'number' ? a - b : String(a).localeCompare(String(b))).map(show);
+    choice(cfg.columns[k], [['all', 'all'], ...values.map(v => [v, v])], state.filters[k] || 'all', v => state.filters[k] = v);
+  });
+  typeset(bar);
+
+  function render() {
+    untypeset(out);
+    const cols = Object.entries(cfg.columns);
+    if (!(state.metric in cfg.columns)) cols.push([state.metric, titles[state.metric] || state.metric]);
+    let html = table(['sweep', ...cols.map(c => esc(c[1])), 'reach the threshold'], secs.map(s => {
+      const idx = ranked(s, state.metric), y = s.table[state.metric];
+      return [esc(s.title), ...cols.map(([k]) => !idx.length ? '–' : k === state.metric ? mark(y[idx[0]]) : esc(show((s.table[k] || [])[idx[0]]))),
+              `${idx.filter(i => reaches(y[i])).length} / ${idx.length}`]; }));
+    (cfg.sample_complexity || []).forEach(metric => {
+      const best = {};                                   // d -> n -> the best run's value
+      secs.forEach(s => ranked(s, metric).forEach(i => { const row = best[s.table['data.d'][i]] ??= {}, n = s.table['data.n'][i];
+        if (!(n in row)) row[n] = s.table[metric][i]; }));
+      const ds = Object.keys(best).map(Number).sort((a, b) => a - b);
+      const ns = [...new Set(ds.flatMap(d => Object.keys(best[d]).map(Number)))].sort((a, b) => a - b);
+      const points = [];                                 // (log d, log n*) where the crossing is inside the grid
+      const rows = ds.map(d => {
+        const have = ns.filter(n => n in best[d]), k = have.findIndex(n => reaches(best[d][n]));
+        let star = k < 0 ? `&gt; ${have[have.length - 1]}` : `&le; ${have[0]}`;
+        if (k > 0) { const a = best[d][have[k - 1]], b = best[d][have[k]], t = (a - state.threshold) / (a - b);
+          const n = Math.exp(Math.log(have[k - 1]) + t * Math.log(have[k] / have[k - 1]));
+          points.push([Math.log(d), Math.log(n)]); star = Math.round(n); }
+        return [d, ...ns.map(n => mark(best[d][n])), `<b>${star}</b>`]; });
+      let law = 'A fit of $n^\\ast\\propto d^{\\beta}$ needs the crossing inside the grid at two or more $d$.';
+      if (points.length > 1) {
+        const mean = k => points.reduce((sum, p) => sum + p[k], 0) / points.length, x = mean(0), y = mean(1);
+        const beta = points.reduce((sum, p) => sum + (p[0] - x) * (p[1] - y), 0) / points.reduce((sum, p) => sum + (p[0] - x) ** 2, 0);
+        law = `$n^\\ast\\approx ${show(Math.exp(y - beta * x))}\\,d^{${beta.toFixed(2)}}$, least squares in log-log over ${points.length} values of $d$.`;
+      }
+      html += `<h3>${esc(titles[metric] || metric)}: $n^\\ast(d)$</h3><div class="md">` + md('Rows are $d$ and columns $n$. A cell is the best '
+        + 'run\'s value at its last step, green where it reaches the threshold. $n^\\ast(d)$ is the smallest $n$ that reaches it, '
+        + 'interpolated in $\\log n$ between the two grid values around the crossing. ' + law) + '</div>'
+        + table(['$d$', ...ns.map(String), '$n^\\ast(d)$'], rows);
+    });
+    out.innerHTML = html; typeset(out);
+  }
+  render();
+}
+
 const app = document.getElementById('app');
 { const bar = el('div', 'toolbar'); noteCount = el('span'); const ex = el('button', 'btn', 'Export comments');
   ex.onclick = showExport; bar.append(noteCount, ex); app.appendChild(bar); updateCount(); }
@@ -1065,8 +1228,10 @@ if (DATA.sections.length > 1 || DATA.text) {
   if (DATA.text) app.appendChild(el('div', 'md', md(DATA.text)));
   const nav = el('nav'); app.appendChild(nav);
   DATA.sections.forEach(s => { const a = el('a', null, esc(s.title)); a.href = '#' + s.id; nav.appendChild(a); });
+  if (DATA.best_runs) { const a = el('a', null, 'Best runs'); a.href = '#best-runs'; nav.appendChild(a); }
 }
 DATA.sections.forEach(s => Section(s, app));
+if (DATA.best_runs) BestRuns(DATA.best_runs, app);
 typeset(app);
 </script></body></html>
 """
