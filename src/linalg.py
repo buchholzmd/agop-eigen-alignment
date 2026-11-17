@@ -200,3 +200,28 @@ def subspace_angles(A, B):
         "sin_max":           sines[-1],
         "subspace_dist_sq":  jnp.linalg.norm(sines) ** 2, # = r * (1 - mean_alignment) for k <= r
     }
+
+@jax.jit
+def directional_strength(A, dirs):
+    """Fraction of a PSD matrix's energy along each of a set of directions.
+
+    A    : (d, d) PSD -- the NFM M or an AGOP.
+    dirs : (d, r) orthonormal COLUMNS, the target directions U^T.
+
+    strength[j] = u_j^T A u_j / tr(A).  The raw Rayleigh quotient u_j^T A u_j
+    carries A's scale, which for M moves with the width, the parameterization
+    and the learning rate, so it is not comparable across a sweep.  tr(A) is
+    the only denominator that fixes this without introducing a second
+    width-dependence: at an isotropic initialization strength[j] = 1/d for
+    every width, whereas normalizing by lambda_max(A) or ||A||_F puts the same
+    baseline at 0.024 -> 0.730 and 0.015 -> 0.087 over m = 4 .. 4096 at d = 128.
+
+    Where subspace_angles asks whether u_j lies in the top-r eigenspace, this
+    asks how much of A sits there, weighted by eigenvalue -- the eigenvalue
+    half of the same question.  The sum over j is tr(dirs^T A dirs)/tr(A), the
+    fraction of A inside span(dirs): r/d at initialization and 1 for the target
+    AGOP, which has no energy outside span(U).
+    """
+    assert A.shape[0] == dirs.shape[0], "A and dirs must share the ambient dimension"
+    rayleigh = jnp.einsum("dj,de,ej->j", dirs, A, dirs)
+    return rayleigh / (jnp.trace(A) + 1e-12)

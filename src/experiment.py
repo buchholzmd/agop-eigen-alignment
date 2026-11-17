@@ -17,7 +17,7 @@ from networks import MLP
 from opt import TrainState, gd_update, train
 from ntk import nvp
 from hess import _hvp_flat
-from linalg import matrix_cosine, mvp_power_iteration, nuclear
+from linalg import directional_strength, matrix_cosine, mvp_power_iteration, nuclear
 from poly import poly
 from multi_index import gaussian_egop, generate_multi_index_data, multi_index_set
 from agop import agop
@@ -102,7 +102,8 @@ def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
     if U is not None:
         metrics_config["target"]   = {"fn": metrics.target_alignment,
                                       "args": (target_agop, target_eigvals, target_eigvecs, U.T)}
-        metrics_config["subspace"] = {"fn": metrics.subspace_recovery, "args": (U.T,)}
+        metrics_config["subspace"] = {"fn": metrics.subspace_recovery,
+                                      "args": (U.T, directional_strength(target_agop, U.T))}
     if target_egop is not None:
         metrics_config["egop"] = {"fn": metrics.egop_alignment,
                                   "args": (target_egop, egop_eigvals, egop_eigvecs,
@@ -235,8 +236,7 @@ def log_run_to_wandb(out, run=None):
 
             # The learned AGOP G alone, against the target's AGOP G* on the training
             # inputs, and (egop in the name) against the target's population EGOP
-            # (rayleighX, rayleigh_ratioX, align_trueX, rank_trueX, align_egopX and
-            # rank_egopX are added below).
+            # (align_trueX, rank_trueX, align_egopX and rank_egopX are added below).
             "agop/agop_nuclear":  float(m["target"]["agop_nuclear"][t]),
             "agop/nuclear_ratio": float(m["target"]["nuclear_ratio"][t]),
             "agop/egop_nuclear_ratio": float(m["egop"]["egop_nuclear_ratio"][t]),
@@ -262,21 +262,23 @@ def log_run_to_wandb(out, run=None):
             "subspace/agop_mean_alignment":  float(m["subspace"]["agop_mean_alignment"][t]),
             "subspace/agop_sin_max":         float(m["subspace"]["agop_sin_max"][t]),
             "subspace/agop_subspace_dist_sq": float(m["subspace"]["agop_subspace_dist_sq"][t]),
+            "subspace/nfm_total_strength":   float(m["subspace"]["nfm_total_strength"][t]),
+            "subspace/agop_total_strength":  float(m["subspace"]["agop_total_strength"][t]),
         }
         # Per index X, one metric at a time so each family's panels stay together.
-        # X is the target direction u_X for rayleigh / align_dir, the target AGOP
-        # eigenvector v*_X for align_true / rank_true, the target EGOP's eigenvector
-        # for align_egop / rank_egop, and the learned AGOP eigenvector v_X for
-        # nfm_agop_align_dir.
+        # X is the target direction u_X for align_dir / strength_ratio, the target
+        # AGOP eigenvector v*_X for align_true / rank_true, the target EGOP's
+        # eigenvector for align_egop / rank_egop, and the learned AGOP eigenvector
+        # v_X for nfm_agop_align_dir.
         per_index = (
             ("nfa/nfm_agop_align_dir",  m["nfa_eigen_alignment"]["nfm_agop_alignment"], float),
-            ("agop/rayleigh",           m["target"]["rayleigh"],        float),
-            ("agop/rayleigh_ratio",     m["target"]["rayleigh_ratio"],  float),
             ("agop/align_true",         m["target"]["align_true"],      float),
             ("agop/rank_true",          m["target"]["rank_true"],       int),
             ("agop/align_egop",         m["egop"]["align_egop"],        float),
             ("agop/rank_egop",          m["egop"]["rank_egop"],         int),
             ("subspace/align_dir",      m["subspace"]["nfm_alignment"], float),
+            ("subspace/nfm_strength_ratio",  m["subspace"]["nfm_strength_ratio"],  float),
+            ("subspace/agop_strength_ratio", m["subspace"]["agop_strength_ratio"], float),
         )
         for key, series, cast in per_index:
             for j in range(r):
@@ -284,6 +286,10 @@ def log_run_to_wandb(out, run=None):
         wandb.log(row, step=t)
 
     run.summary.update(metrics.run_summary(m, lr))
+    # The constant each strength_ratioX is divided by, logged once so the raw
+    # energy share u_X^T A u_X / tr(A) can be recovered from the ratio.
+    target_strength = directional_strength(out["G_star"], out["U"].T)
+    run.summary.update({f"target_strength{j}": float(target_strength[j]) for j in range(r)})
     log_directional_slices(out)
     run.finish()
     return run

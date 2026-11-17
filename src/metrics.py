@@ -20,9 +20,9 @@ from functools import partial
 from nn_utils import get_activations, nn_agop, sparsity, _cov_mvp
 from ntk import nvp
 from hess import _hvp_flat
-from linalg import (align_bases, matrix_cosine, mvp_orthogonal_iteration, mvp_power_iteration,
-                    hutchinson_trace_estimate, intrinsic_dim, stable_rank, subspace_angles,
-                    wasserstein_1d, nuclear)
+from linalg import (align_bases, directional_strength, matrix_cosine, mvp_orthogonal_iteration,
+                    mvp_power_iteration, hutchinson_trace_estimate, intrinsic_dim, stable_rank,
+                    subspace_angles, wasserstein_1d, nuclear)
 
 def agop(state, model, X, layers=(0,), **kwargs):
     return nn_agop(state.params, model, X,
@@ -209,7 +209,6 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
     agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
     nfm_eigvals  = kwargs["nfm_eigs"]["eigvals"]
 
-    rayleigh       = jnp.einsum("dj,de,ej->j", target_dirs, learned_agop, target_dirs)
     agop_nuclear   = nuclear(learned_agop)
     target_nuclear = nuclear(target_agop)
     agop_rank      = rank_stats(kwargs["agop_eigs"]["spectrum"])
@@ -227,8 +226,6 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
         "nuclear_ratio":   agop_nuclear / (target_nuclear + 1e-12),
         "wasserstein1_agop_target": wasserstein_1d(agop_eigvals, target_eigvals),
         "wasserstein1_nfm_agop":    wasserstein_1d(nfm_eigvals, agop_eigvals),
-        "rayleigh":       rayleigh,
-        "rayleigh_ratio": rayleigh / (target_eigvals + 1e-12),
         **{f"agop_{name}": value for name, value in agop_rank.items()},
         **{f"{name}_ratio": value / (target_rank[name] + 1e-12)
            for name, value in agop_rank.items()},
@@ -282,21 +279,37 @@ def egop_alignment(state, target_egop, egop_eigvals, egop_eigvecs, num_power_ite
         "rank_egop":                rank,
     }
 
-def subspace_recovery(state, target_dirs, **kwargs):
-    """Principal angles to the target subspace, from the NFM and from the AGOP.
+def subspace_recovery(state, target_dirs, target_strength, **kwargs):
+    """The NFM and the AGOP against span(U), by eigenvectors and by energy.
 
-    target_dirs : (d, r) the target directions as COLUMNS, i.e. U.T.
+    target_dirs     : (d, r) the target directions as COLUMNS, i.e. U.T.
+    target_strength : (r,) directional_strength(G*, U.T), the share of the
+                      target AGOP along each direction. It sums to 1, is fixed
+                      for a run, and is computed once in run_one.
 
-    Both frames come straight out of nfm_eigs / agop_eigs, which are already
-    column-orthonormal and must sit above this entry in metrics_config.
+    Two halves of the same question. subspace_angles asks whether u_X lies in
+    the top-r eigenspace and ignores eigenvalues entirely; directional_strength
+    asks what share of the matrix sits along u_X and is eigenvalue-weighted.
+    Alignment rising while strength does not is the top eigenvectors turning
+    toward span(U) without span(U) gaining any of the mass.
+
+    The angle frames come straight out of nfm_eigs / agop_eigs, which are
+    already column-orthonormal; the strengths use the full M and G. All four
+    must sit above this entry in metrics_config.
     """
-    nfm_eigvecs  = kwargs["nfm_eigs"]["eigvecs"]
-    agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
-
-    result = {f"nfm_{name}":  value
-              for name, value in subspace_angles(nfm_eigvecs, target_dirs).items()}
-    result.update({f"agop_{name}": value
-                   for name, value in subspace_angles(agop_eigvecs, target_dirs).items()})
+    result = {}
+    for name, eigvecs, matrix in (
+            ("nfm",  kwargs["nfm_eigs"]["eigvecs"],  kwargs["nfm"]),
+            ("agop", kwargs["agop_eigs"]["eigvecs"], kwargs["agop"]["layer1_agop"])):
+        result.update({f"{name}_{key}": value
+                       for key, value in subspace_angles(eigvecs, target_dirs).items()})
+        strength = directional_strength(matrix, target_dirs)
+        # Reported relative to the target, so 1 means matched for every X. The
+        # target's own share is used, NOT its X-th eigenvalue: the rows of U are
+        # eigenvectors of G* only when no two of its multi-indices differ by one
+        # degree in one direction, which fails for any target with a linear part.
+        result[f"{name}_strength_ratio"] = strength / (target_strength + 1e-12)
+        result[f"{name}_total_strength"] = strength.sum()
     return result
 
 
