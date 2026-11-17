@@ -83,6 +83,14 @@ groups: &report_groups
       - metric: subspace/agop_mean_alignment
         title: AGOP Mean Index-Space Alignment
         text: $\frac1r\sum_X\cos^2\theta_X$ between $Q_{G_n}$ and span($U$).
+      - metric: subspace/nfm_depth
+        title: NFM Index-Space Depth
+        log_y: true
+        text: The number of top eigenvectors of $M$ it takes to hold span($U$), $r$ when recovered.
+      - metric: subspace/agop_depth
+        title: AGOP Index-Space Depth
+        log_y: true
+        text: The number of top eigenvectors of $G_n$ it takes to hold span($U$), $r$ when recovered.
 
 sections:
   - group: sample-complexity-sweep

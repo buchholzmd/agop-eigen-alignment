@@ -232,6 +232,7 @@ def log_run_to_wandb(out, run=None):
             "nfa/nfm_agop_cos_max":          float(m["nfa_eigen_alignment"]["nfm_agop_cos_max"][t]),
             "nfa/nfm_agop_sin_max":          float(m["nfa_eigen_alignment"]["nfm_agop_sin_max"][t]),
             "nfa/nfm_agop_subspace_dist_sq": float(m["nfa_eigen_alignment"]["nfm_agop_subspace_dist_sq"][t]),
+            "nfa/nfm_agop_depth":            int(m["nfa_eigen_alignment"]["nfm_agop_depth"][t]),
             "nfa/wasserstein1_nfm_agop":     float(m["target"]["wasserstein1_nfm_agop"][t]),
 
             # The learned AGOP G alone, against the target's AGOP G* on the training
@@ -259,9 +260,11 @@ def log_run_to_wandb(out, run=None):
             "subspace/nfm_cos_max":          float(m["subspace"]["nfm_cos_max"][t]),
             "subspace/nfm_sin_max":          float(m["subspace"]["nfm_sin_max"][t]),
             "subspace/nfm_subspace_dist_sq": float(m["subspace"]["nfm_subspace_dist_sq"][t]),
+            "subspace/nfm_depth":            int(m["subspace"]["nfm_depth"][t]),
             "subspace/agop_mean_alignment":  float(m["subspace"]["agop_mean_alignment"][t]),
             "subspace/agop_sin_max":         float(m["subspace"]["agop_sin_max"][t]),
             "subspace/agop_subspace_dist_sq": float(m["subspace"]["agop_subspace_dist_sq"][t]),
+            "subspace/agop_depth":           int(m["subspace"]["agop_depth"][t]),
             "subspace/nfm_total_strength":   float(m["subspace"]["nfm_total_strength"][t]),
             "subspace/agop_total_strength":  float(m["subspace"]["agop_total_strength"][t]),
         }

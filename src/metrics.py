@@ -22,7 +22,7 @@ from ntk import nvp
 from hess import _hvp_flat
 from linalg import (align_bases, directional_strength, matrix_cosine, mvp_orthogonal_iteration,
                     mvp_power_iteration, hutchinson_trace_estimate, intrinsic_dim, stable_rank,
-                    subspace_angles, wasserstein_1d, nuclear)
+                    subspace_angles, subspace_depth, wasserstein_1d, nuclear)
 
 def agop(state, model, X, layers=(0,), **kwargs):
     return nn_agop(state.params, model, X,
@@ -38,9 +38,10 @@ def agop_eigs(state, model, X, k, rng, num_power_iters=None, **kwargs):
     else:
         spectrum, vecs = jla.eigh(G)
         spectrum, vecs = spectrum[::-1], vecs[:, ::-1]
-        return {"eigvals": spectrum[:k], "eigvecs": vecs[:, :k], "spectrum": spectrum}
+        return {"eigvals": spectrum[:k], "eigvecs": vecs[:, :k], "spectrum": spectrum,
+                "all_eigvecs": vecs}
 
-    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals}
+    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals, "all_eigvecs": eigvecs}
 
 def nfm(state, **kwargs):
     return _nfm(state.params[0]['weights'])
@@ -54,9 +55,10 @@ def nfm_eigs(state, k, rng, num_power_iters=None, **kwargs):
     else:
         _, sv, Vh = jnp.linalg.svd(W, full_matrices=False)
         spectrum = sv ** 2
-        return {"eigvals": spectrum[:k], "eigvecs": Vh[:k].T, "spectrum": spectrum}
+        return {"eigvals": spectrum[:k], "eigvecs": Vh[:k].T, "spectrum": spectrum,
+                "all_eigvecs": Vh.T}
 
-    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals}
+    return {"eigvals": eigvals, "eigvecs": eigvecs, "spectrum": eigvals, "all_eigvecs": eigvecs}
 
 def nfa_cosine(state, **kwargs):
     M = kwargs["nfm"]
@@ -64,19 +66,23 @@ def nfa_cosine(state, **kwargs):
     return {"matrix_correlation": matrix_cosine(M, G)}
 
 def nfa_alignment(state, **kwargs):
-    """The NFA at the level of eigenvectors and eigenspaces: top-r NFM vs top-r AGOP.
+    """The NFA at the level of eigenvectors and eigenspaces: the NFM vs top-r AGOP.
 
-    align_bases matches individual eigenvectors, which is unstable when
-    eigenvalues are tied. The nfm_agop_ entries are the subspace_recovery suite
-    (principal angles) with the NFM eigenspace in place of span(U) as the frame
-    and the AGOP eigenvectors as the directions: nfm_agop_alignment[X] is the
-    fraction of AGOP eigenvector X inside the NFM's top-r eigenspace.
+    align_bases matches each top-r AGOP eigenvector to one of ALL the NFM's
+    eigenvectors, so an NFM eigenvector ranked below r can still be its match.
+    Matching individual eigenvectors is unstable when eigenvalues are tied. The
+    nfm_agop_ entries are the subspace_recovery suite (principal angles) with
+    the NFM eigenspace in place of span(U) as the frame and the AGOP
+    eigenvectors as the directions: nfm_agop_alignment[X] is the fraction of
+    AGOP eigenvector X inside the NFM's top-r eigenspace, and nfm_agop_depth is
+    how far down the NFM's spectrum the AGOP's top-r eigenspace sits.
     """
     M = kwargs["nfm_eigs"]
     G = kwargs["agop_eigs"]
-    result = align_bases(M["eigvecs"], G["eigvecs"])
+    result = align_bases(M["all_eigvecs"], G["eigvecs"])
     result.update({f"nfm_agop_{name}": value
                    for name, value in subspace_angles(M["eigvecs"], G["eigvecs"]).items()})
+    result["nfm_agop_depth"] = subspace_depth(M["all_eigvecs"], G["eigvecs"])
     return result
 
 def neuron_sparsity(state, model=None, X=None, activations=None, **kwargs):
@@ -185,9 +191,13 @@ def matched_alignment(learned_eigvecs, reference_eigvecs):
     LEARNED eigenvector (perm[i] = reference matched to learned i); inverting it keys
     both series by the reference, so a series never changes meaning when the
     matching does.
+
+    learned_eigvecs may hold more eigenvectors than the reference, e.g. all d of
+    them: rank[X] is then free to exceed r - 1. perm is -1 on the unmatched ones,
+    which argsort puts first, so its last r entries are the inverse permutation.
     """
     alignment = align_bases(learned_eigvecs, reference_eigvecs)
-    rank  = jnp.argsort(alignment["perm"])
+    rank  = jnp.argsort(alignment["perm"])[-reference_eigvecs.shape[1]:]
     align = alignment["overlap_matrix"][rank, jnp.arange(rank.shape[0])]
     return alignment["score"], align, rank
 
@@ -206,7 +216,7 @@ def target_alignment(state, target_agop, target_eigvals, target_eigvecs, target_
     learned_agop = kwargs["agop"]["layer1_agop"]
     learned_nfm  = kwargs["nfm"]
     agop_eigvals = kwargs["agop_eigs"]["eigvals"]
-    agop_eigvecs = kwargs["agop_eigs"]["eigvecs"]
+    agop_eigvecs = kwargs["agop_eigs"]["all_eigvecs"]
     nfm_eigvals  = kwargs["nfm_eigs"]["eigvals"]
 
     agop_nuclear   = nuclear(learned_agop)
@@ -256,7 +266,7 @@ def egop_alignment(state, target_egop, egop_eigvals, egop_eigvecs, num_power_ite
     """
     learned_agop = kwargs["agop"]["layer1_agop"]
     learned_nfm  = kwargs["nfm"]
-    mean_align, align, rank = matched_alignment(kwargs["agop_eigs"]["eigvecs"], egop_eigvecs)
+    mean_align, align, rank = matched_alignment(kwargs["agop_eigs"]["all_eigvecs"], egop_eigvecs)
 
     dim = learned_agop.shape[0]
     if dim <= dense_max:
@@ -296,13 +306,18 @@ def subspace_recovery(state, target_dirs, target_strength, **kwargs):
     The angle frames come straight out of nfm_eigs / agop_eigs, which are
     already column-orthonormal; the strengths use the full M and G. All four
     must sit above this entry in metrics_config.
+
+    The angles see the top-r eigenspace only, so one eigenvector outside
+    span(U) with a large eigenvalue reads as a missing direction. subspace_depth
+    reads every eigenvector and says how many it takes to hold span(U).
     """
     result = {}
-    for name, eigvecs, matrix in (
-            ("nfm",  kwargs["nfm_eigs"]["eigvecs"],  kwargs["nfm"]),
-            ("agop", kwargs["agop_eigs"]["eigvecs"], kwargs["agop"]["layer1_agop"])):
+    for name, eigs, matrix in (
+            ("nfm",  kwargs["nfm_eigs"],  kwargs["nfm"]),
+            ("agop", kwargs["agop_eigs"], kwargs["agop"]["layer1_agop"])):
         result.update({f"{name}_{key}": value
-                       for key, value in subspace_angles(eigvecs, target_dirs).items()})
+                       for key, value in subspace_angles(eigs["eigvecs"], target_dirs).items()})
+        result[f"{name}_depth"] = subspace_depth(eigs["all_eigvecs"], target_dirs)
         strength = directional_strength(matrix, target_dirs)
         # Reported relative to the target, so 1 means matched for every X. The
         # target's own share is used, NOT its X-th eigenvalue: the rows of U are

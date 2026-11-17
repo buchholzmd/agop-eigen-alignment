@@ -112,7 +112,11 @@ def matrix_cosine(A, B):
 @jax.jit
 def align_bases(QA, QB):
     """
-    QA, QB: (d, k) matrices with orthonormal columns
+    QA: (d, k) orthonormal columns, the candidates
+    QB: (d, r) orthonormal columns, r <= k
+
+    Every column of QB is matched to its own column of QA. With k > r the
+    candidates left over are unmatched, and perm is -1 there.
     """
     W = (QA.T @ QB) ** 2
 
@@ -125,7 +129,7 @@ def align_bases(QA, QB):
     score = jnp.mean(matched)
 
     # permutation vector: maps i -> col_ind[i]
-    perm = jnp.zeros(W.shape[0], dtype=jnp.int32)
+    perm = jnp.full(W.shape[0], -1, dtype=jnp.int32)
     perm = perm.at[row_ind].set(col_ind)
 
     return {
@@ -200,6 +204,23 @@ def subspace_angles(A, B):
         "sin_max":           sines[-1],
         "subspace_dist_sq":  jnp.linalg.norm(sines) ** 2, # = r * (1 - mean_alignment) for k <= r
     }
+
+@jax.jit
+def subspace_depth(eigvecs, dirs, level=0.9):
+    """How far down a spectrum a subspace sits.
+
+    eigvecs : (d, k) orthonormal COLUMNS, eigenvectors by DESCENDING eigenvalue
+    dirs    : (d, r) orthonormal COLUMNS spanning the subspace
+
+    The smallest K whose top-K eigenspace has mean alignment >= level with
+    span(dirs), i.e. sum_{i <= K} ||dirs^T v_i||^2 >= level * r. It is about r
+    when span(dirs) is the top-r eigenspace, and every eigenvector outside
+    span(dirs) with a larger eigenvalue adds one. subspace_angles at k = r reads
+    such an eigenvector as a missing direction; this reads it as depth r + 1.
+    k + 1 means the k eigenvectors given never reach the level.
+    """
+    captured = jnp.cumsum(((eigvecs.T @ dirs) ** 2).sum(axis=1)) / dirs.shape[1]
+    return 1 + jnp.sum(captured < level)
 
 @jax.jit
 def directional_strength(A, dirs):
