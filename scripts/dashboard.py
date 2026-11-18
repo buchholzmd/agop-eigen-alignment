@@ -53,15 +53,37 @@ VENDOR = {
 # step where it occurs (plus the first and last steps and the edges of non-finite stretches).
 BUCKETS = 64
 TERMINAL = {"finished", "crashed", "failed", "killed"}
-REGIME_COLORS = {"monotonic": "#5aa9e6", "catapult": "#f5a623", "diverged": "#e5534b"}
+REGIME_COLORS = {"monotonic": "#5aa9e6", "progressive sharpening": "#bc8cff", "catapult": "#f5a623",
+                 "edge of stability": "#7ee787", "diverged": "#e5534b"}
+# metrics.classify_regime reads the sharpness eta * lambda_max(P^1/2 H_t P^1/2) as this logged
+# curve times the run's lr_absolute; it is pulled for every run. Runs logged before the curve was
+# preconditioned are classified from the loss alone unless P = 1 (standard parameterization).
+SHARPNESS = ("geometry/hessian_max_eigval", "lr_absolute")
 # The best-runs table's default columns, {key: header}. A key is a run-config key, `regime`, or
-# a panel's metric, shown at its last step.
+# a panel's metric, shown at its last step. optim.lr's header assumes the axis has `scale: 2`.
 BEST_RUN_COLUMNS = {
     "data.n": "$n$", "model.width": "$m$", "model.parameterization": "param",
-    "target.alpha": r"$\alpha^\ast$", "target.terms": "target", "optim.lr": "lr ratio",
-    "lr_absolute": "lr absolute", "eta_crit": r"$\eta_{\text{crit}}$", "regime": "regime",
+    "target.alpha": r"$\alpha^\ast$", "target.terms": "target", "optim.lr": r"$\eta\lambda_{\max}(H_0)$",
+    "lr_absolute": r"$\eta$", "hess_lambda0": r"$\lambda_{\max}(H_0)$", "regime": "regime",
     "subspace/nfm_subspace_dist_sq": "NFM", "subspace/agop_subspace_dist_sq": "AGOP",
     "loss": "train loss", "val_loss": "val loss"}
+# The sweep axis holding the learning rate; the runs that share every other axis form one lr scan.
+LR_AXIS = "optim.lr"
+# Curves the dashboard derives instead of reading them from W&B, {key: (logged key, run-config
+# key, description)}: the logged curve times the run's config value.
+DERIVED = {
+    "geometry/lr_times_hessian_max_eigval": (
+        "geometry/hessian_max_eigval", "lr_absolute",
+        r"$\eta\lambda_{\max}(P^{1/2}H_tP^{1/2})$, the step size in units of the sharpness gradient "
+        r"descent sees, with $P$ its per-layer learning rates ($H_t$ itself for standard "
+        r"parameterization): it is at the edge of stability at 2. Computed by the dashboard from "
+        r"`geometry/hessian_max_eigval`."),
+    "geometry/lr_times_ntk_max_eigval_x2": (
+        "geometry/ntk_max_eigval_x2", "lr_absolute",
+        r"$\eta\lambda_{\max}(\frac2n JPJ^\top)$, the same in kernel units: it shares its top eigenvalue "
+        r"with the Gauss-Newton part of $P^{1/2}H_tP^{1/2}$, so the catapult threshold is again 2. "
+        r"Computed by the dashboard from `geometry/ntk_max_eigval_x2`."),
+}
 
 
 # ----------------------------------------------------------------------------- W&B
@@ -232,7 +254,15 @@ def pull(api, entity, project, source, metrics, aliases, cache_root, refresh, wo
         print(f"{source_label(source)}: {len(runs) - len(newest)} runs repeat a point; kept the newest", flush=True)
     runs = list(newest.values())
     for r in runs:
-        r["regime"] = classify_regime(r["curves"]["loss"]) if "loss" in r["curves"] else None
+        curve, factor = SHARPNESS
+        preconditioned = (r["config"].get("sharpness_preconditioned")
+                          or r["config"].get("model.parameterization", "standard") == "standard")
+        sharpness = (r["curves"][curve] * r["config"][factor] if preconditioned and curve in r["curves"]
+                     and r["config"].get(factor) is not None else None)
+        r["regime"] = classify_regime(r["curves"]["loss"], sharpness) if "loss" in r["curves"] else None
+        for key, (logged, factor, _) in DERIVED.items():
+            if logged in r["curves"] and r["config"].get(factor) is not None:
+                r["curves"][key] = r["curves"][logged] * np.float32(r["config"][factor])
     print(f"{source_label(source)}: {len(runs)} runs from {', '.join(s.id for s in sweeps)}, "
           f"axes {list(axes)}", flush=True)
     return axes, runs
@@ -312,10 +342,12 @@ def value_index(values, v):
 def axis_meta(spec, key, values):
     """Display information for one axis. Numeric axes are sorted ascending, so dropdowns,
     legends, color ramps and series read low to high. The spec's `labels` is a list (one per
-    value, in the sweep's order) or a {value: label} map; unlabeled values show as they are."""
+    value, in the sweep's order) or a {value: label} map; unlabeled values show as they are,
+    times the axis's `scale` when it has one. Filters and `fixed` still name the sweep's values."""
     a = (spec.get("axes") or {}).get(key, {})
-    labels, fmt = a.get("labels"), a.get("format")
-    show = lambda v: fmt.format(v) if fmt and isinstance(v, (int, float)) else str(v)
+    labels, fmt, scale = a.get("labels"), a.get("format"), a.get("scale", 1)
+    show = lambda v: (str(v) if isinstance(v, bool) or not isinstance(v, (int, float))
+                      else fmt.format(v * scale) if fmt else str(v * scale))
     if isinstance(labels, dict):
         shown = [str(labels[v]) if v in labels else show(v) for v in values]
     elif isinstance(labels, list):
@@ -357,7 +389,7 @@ def check_spec(spec, pulled):
             elif k not in axes:
                 raise SystemExit(f"{where}: {k!r} is not an axis of its sweeps; axes: {list(axes)}")
     undescribed = {(group_id(g), p["metric"]) for s in spec["sections"] for g in s["groups"]
-                   if g.get("preamble") for p in g["panels"] if p["metric"] not in readme_metrics()}
+                   if g.get("preamble") for p in g["panels"] if p["metric"] not in described_metrics()}
     for gid, metric in sorted(undescribed):
         print(f"warning: panel group {gid!r}: the README's \"W&B metrics\" has no description of "
               f"{metric!r}, so its preamble leaves it out", flush=True)
@@ -449,21 +481,27 @@ def readme_metrics():
     return _readme_metrics
 
 
+def described_metrics():
+    """{metric key: description}: the README's, and DERIVED's for the curves the dashboard computes."""
+    return {**readme_metrics(), **{key: description for key, (_, _, description) in DERIVED.items()}}
+
+
 def group_text(group):
     """A panel group's text, then, with `preamble: true`, each panel's title and metric with the
     README's description of it."""
     text = group.get("text", "")
     if group.get("preamble"):
-        described = readme_metrics()
+        described = described_metrics()
         items = [f"- **{p.get('title', p['metric'])}** (`{p['metric']}`): {described[p['metric']]}"
                  for p in group["panels"] if p["metric"] in described]
         text = "\n\n".join(t for t in (text, "\n".join(items)) if t)
     return text
 
 
-def table_value(run, key):
+def table_value(run, key, scale=1):
     """A run's entry in the best-runs table: a metric at its last step (None unless finite), its
-    regime, or its config value, with target.terms written as the sum of products it stands for."""
+    regime, or its config value (times its axis's `scale`), with target.terms written as the sum
+    of products it stands for."""
     if key in run["curves"]:
         y = run["curves"][key]
         return float(y[-1]) if len(y) and np.isfinite(y[-1]) else None
@@ -472,7 +510,91 @@ def table_value(run, key):
     value = run["config"].get(key)
     if key == "target.terms" and value:
         return " + ".join("·".join(f"h{degree}" for degree in term.values()) for term in value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value * scale
     return value
+
+
+def lr_scans(spec, axes, runs):
+    """-> (metas of every axis but LR_AXIS, {index on each of them: runs}). The runs that differ
+    only in the learning rate form one lr scan; there are none when LR_AXIS is not an axis."""
+    if LR_AXIS not in axes:
+        return [], {}
+    metas = [axis_meta(spec, k, v) for k, v in axes.items() if k != LR_AXIS]
+    scans = {}
+    for r in runs:
+        ix = tuple(value_index(m["values"], r["axes"].get(m["key"])) for m in metas)
+        if None not in ix:
+            scans.setdefault(ix, []).append(r)
+    return metas, scans
+
+
+def divergence(scan):
+    """-> (eta_max, eta_max * lambda_0, the largest eta * lambda_0 in the scan) for one lr scan.
+    eta_max is the smallest learning rate whose run diverged, None (twice) when no run did;
+    eta * lambda_0 is each run's lr_absolute * hess_lambda0, lambda_0 = lambda_max(P^1/2 H_0 P^1/2)."""
+    usable = [r for r in scan if r["config"].get("lr_absolute") is not None
+              and r["config"].get("hess_lambda0") is not None]
+    times_lambda0 = lambda r: r["config"]["lr_absolute"] * r["config"]["hess_lambda0"]
+    largest = max(map(times_lambda0, usable), default=None)
+    diverged = [r for r in usable if r.get("regime") == "diverged"]
+    if not diverged:
+        return None, None, largest
+    first = min(diverged, key=lambda r: r["config"]["lr_absolute"])
+    return first["config"]["lr_absolute"], times_lambda0(first), largest
+
+
+def divergence_text(spec, axes, runs):
+    """A section's divergence threshold as Markdown: {summary, table}, or None without lr scans.
+    Scans with no trained run are left out. The table lists the scans in which a run diverged,
+    with each one's eta_max; it is empty when none did."""
+    metas, scans = lr_scans(spec, axes, runs)
+    lambda0 = lambda scan: next((r["config"]["hess_lambda0"] for r in scan
+                                 if r["config"].get("hess_lambda0") is not None), None)
+    rows = [([m["labels"][i] for m, i in zip(metas, ix)], lambda0(scan), *divergence(scan))
+            for ix, scan in sorted(scans.items())]
+    rows = [row for row in rows if row[4] is not None]
+    if not rows:
+        return None
+    diverged = [row for row in rows if row[3] is not None]
+    reached = [row[4] for row in rows if row[3] is None]
+    span = lambda xs: f"={min(xs):.3g}" if f"{min(xs):.3g}" == f"{max(xs):.3g}" else f"={min(xs):.3g}\\text{{ to }}{max(xs):.3g}"
+    summary = (r"**Divergence threshold** $\eta_{\max}$, the smallest learning rate of an lr scan "
+               r"(the runs that differ only in $\eta$) whose run diverged, with $\lambda_0$ the sharpness at initialization: ")
+    if not diverged:
+        summary += rf"no run diverged; the lr scans reach $\eta\lambda_0{span(reached)}$."
+    elif not reached:
+        summary += rf"$\eta_{{\max}}\lambda_0{span([row[3] for row in diverged])}$ over the {len(rows)} lr scans."
+    else:
+        summary += (rf"$\eta_{{\max}}\lambda_0{span([row[3] for row in diverged])}$ in {len(diverged)} of the "
+                    rf"{len(rows)} lr scans; in the others no run diverged (they reach $\eta\lambda_0{span(reached)}$).")
+    if not diverged:
+        return {"summary": summary, "table": ""}
+    table = ["| " + " | ".join([*(m["name"] for m in metas), r"$\lambda_0$", r"$\eta_{\max}$",
+                                r"$\eta_{\max}\lambda_0$"]) + " |",
+             "|" + "---:|" * (len(metas) + 3)]
+    for labels, lambda0, eta_max, x_max, _ in diverged:
+        table.append("| " + " | ".join([*labels, f"{lambda0:.4g}", f"{eta_max:.3g}", f"{x_max:.3g}"]) + " |")
+    return {"summary": summary, "table": "\n".join(table)}
+
+
+def regime_map(spec, axes, runs):
+    """Every run's regime, one row per lr scan and one column per learning rate: {axes (the
+    rows' axis names), lr (its name), lrs (column labels), rows: [{labels, cells}]}. A cell is
+    None where no run trained. None without lr scans."""
+    metas, scans = lr_scans(spec, axes, runs)
+    if not scans:
+        return None
+    lr = axis_meta(spec, LR_AXIS, axes[LR_AXIS])
+    rows = []
+    for ix, scan in sorted(scans.items()):
+        cells = [None] * len(lr["values"])
+        for r in scan:
+            j = value_index(lr["values"], r["axes"].get(LR_AXIS))
+            if j is not None:
+                cells[j] = r.get("regime")
+        rows.append({"labels": [m["labels"][i] for m, i in zip(metas, ix)], "cells": cells})
+    return {"axes": [m["name"] for m in metas], "lr": lr["name"], "lrs": lr["labels"], "rows": rows}
 
 
 def section_payload(spec, sec, axes, runs, videos):
@@ -503,9 +625,12 @@ def section_payload(spec, sec, axes, runs, videos):
             v = (sec.get("filters") or {}).get(m["key"], "all")
             filters[m["key"]] = "all" if v == "all" else value_index(m["values"], v)
     columns = (spec.get("best_runs") or {}).get("columns", BEST_RUN_COLUMNS)
-    table = {k: [table_value(runs[i], k) for i in keep]
-             for k in dict.fromkeys([*columns, *metrics, "data.d", "data.n"])}
+    scales = {k: a.get("scale", 1) for k, a in (spec.get("axes") or {}).items()}
+    table = {k: [table_value(runs[i], k, scales.get(k, 1)) for i in keep]
+             for k in dict.fromkeys([*columns, *metrics, "data.d", "data.n", "lr_absolute"])}
     return {"id": section_id(sec), "title": title, "text": sec.get("text", ""),
+            "divergence": divergence_text(spec, axes, [runs[i] for i in keep]),
+            "regime_map": regime_map(spec, axes, [runs[i] for i in keep]) if sec.get("regime_map") else None,
             "axes": metas, "runs": [index[i] for i in keep], "steps": int(steps),
             "step_bytes": 2 if step_dtype == "<u2" else 4, "metrics": metrics, "table": table,
             "regimes": [runs[i].get("regime") for i in keep],
@@ -539,8 +664,8 @@ def vendor(cache_root):
 
 
 def write_page(path, title, text, sections, best_runs, libs):
-    data = json.dumps({"title": title, "text": text, "sections": sections,
-                       "best_runs": best_runs}).replace("</", "<\\/")
+    data = json.dumps({"title": title, "text": text, "sections": sections, "best_runs": best_runs,
+                       "regime_colors": REGIME_COLORS}).replace("</", "<\\/")
     html = (PAGE.replace("{{TITLE}}", title).replace("{{UPLOT_CSS}}", libs["uplot.css"])
                 .replace("{{UPLOT_JS}}", libs["uplot.js"]).replace("{{MARKED_JS}}", libs["marked.js"])
                 .replace("{{MATHJAX_JS}}", libs["mathjax.js"]).replace("{{DATA}}", data))
@@ -608,7 +733,9 @@ def render_video(spec, video, axes, runs, titles, path, fps=4):
     # Limits from the runs that did not diverge: a log row reaches their largest value, so every
     # catapult peak stays in view while diverging curves leave the top; a linear row stops at the
     # 99th percentile, where a single spike would flatten everything else.
+    # A row's `hline` (its panel's) is a dashed reference line, kept inside the limits.
     log_rows = {m: titles.get(m, {}).get("log_y", False) for m in rows}
+    hlines = {m: titles.get(m, {}).get("hline") for m in rows}
     usable = [r for r in table.values() if r.get("regime") != "diverged"] or list(table.values())
     limits = {}
     for m in rows:
@@ -618,20 +745,28 @@ def render_video(spec, video, axes, runs, titles, path, fps=4):
         if not len(v):
             print(f"video {name}: no run logged {m!r}; its row stays empty", flush=True)
             limits[m] = (1e-3, 1.0) if log_rows[m] else (0.0, 1.0)
-        elif log_rows[m]:
-            limits[m] = (v.min() / 1.3, v.max() * 1.3)
+            continue
+        lo, hi = float(v.min()), float(v.max() if log_rows[m] else np.percentile(v, 99))
+        if hlines[m] is not None and (hlines[m] > 0 or not log_rows[m]):
+            lo, hi = min(lo, hlines[m]), max(hi, hlines[m])
+        if log_rows[m]:
+            limits[m] = (lo / 1.3, hi * 1.3)
         else:
-            lo, hi = float(v.min()), float(np.percentile(v, 99))
             pad = 0.05 * (hi - lo) or 0.05 * abs(hi) or 1.0
             limits[m] = (lo - pad, hi + pad)
 
+    def cell_title(j, t):                    # with the cell's absolute learning rate
+        r = table.get((j, t))
+        eta = None if r is None else r["config"].get("lr_absolute")
+        return f"{col_meta['name']} = {col_meta['labels'][j]}" + ("" if eta is None else f"\n$\\eta$ = {eta:.3g}")
+
     plt.style.use("dark_background")
-    fig, axs = plt.subplots(len(rows), C, figsize=(3.4 * C, 2.5 * len(rows) + 1.1),
+    fig, axs = plt.subplots(len(rows), C, figsize=(3.4 * C, 2.5 * len(rows) + 1.3),
                             squeeze=False, sharex=True)
     fig.patch.set_facecolor("#0f1115")
     handles = [Line2D([], [], color=c, lw=2, label=k) for k, c in REGIME_COLORS.items()]
     handles.append(Line2D([], [], color="#8b949e", lw=1, alpha=0.6, label=f"earlier {time_meta['name']}"))
-    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, fontsize=9)
+    fig.legend(handles=handles, loc="lower center", ncol=3, frameon=False, fontsize=9)
     fixed_txt = "   ".join(f"{metas[k]['name']} = {metas[k]['labels'][v]}" for k, v in fixed.items())
     ylabels = {m: "" for m in rows}          # wrapped to the plot height after a first layout
 
@@ -652,12 +787,14 @@ def render_video(spec, video, axes, runs, titles, path, fps=4):
                     if i == 0:
                         ax.text(0.03, 0.05, reg, transform=ax.transAxes, ha="left", va="bottom",
                                 fontsize=8, color=REGIME_COLORS[reg])
+                if hlines[m] is not None and (hlines[m] > 0 or not log_rows[m]):
+                    ax.axhline(hlines[m], color="#e6e6e6", lw=0.9, ls="--", alpha=0.7)
                 if log_rows[m]:
                     ax.set_yscale("log")
                 ax.set_ylim(*limits[m])
                 ax.grid(color="#262a33", lw=0.6)
                 if i == 0:
-                    ax.set_title(f"{col_meta['name']} = {col_meta['labels'][j]}", fontsize=10)
+                    ax.set_title(cell_title(j, t), fontsize=9)
                 if j == 0:
                     ax.set_ylabel(ylabels[m], fontsize=10)
                 if i == len(rows) - 1:
@@ -665,7 +802,7 @@ def render_video(spec, video, axes, runs, titles, path, fps=4):
                 ax.tick_params(labelsize=8)
         fig.suptitle(f"{video['title']}     {time_meta['name']} = {time_meta['labels'][t]}"
                      f"   ({t + 1}/{T})     {fixed_txt}", fontsize=12)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.07, 1, 0.95])
 
     # Lay the grid out without y labels, then wrap each label at spaces so every line fits its
     # row's height. A wrapped label only adds width, so the next layout keeps these heights.
@@ -734,13 +871,14 @@ def main():
     for item in items:
         sources.setdefault(source_key(item), item)
     for key, item in sources.items():
-        metrics = {"loss"}                                    # videos and y-ranges use its regime
+        metrics = {"loss", SHARPNESS[0]}                      # videos and y-ranges use its regime
         for s in spec["sections"]:
             if source_key(s) == key:
                 metrics |= {p["metric"] for g in s["groups"] for p in g["panels"]}
         for v in spec.get("videos") or []:
             if source_key(v) == key:
                 metrics |= set(v["rows"])
+        metrics = {DERIVED[m][0] if m in DERIVED else m for m in metrics}   # pull derives the rest
         pulled[key] = pull(api, entity, project, item, sorted(metrics), aliases,
                            cache, a.refresh, a.workers)
     check_spec(spec, pulled)
@@ -765,6 +903,10 @@ def main():
     best_runs = spec.get("best_runs")
     if best_runs:
         best_runs = {"better": "below", "filters": {}, "columns": BEST_RUN_COLUMNS, **best_runs}
+        # The table shows an axis times its `scale`; filters name the sweep's values, as elsewhere.
+        scales = {k: a.get("scale", 1) for k, a in (spec.get("axes") or {}).items()}
+        best_runs["filters"] = {k: v * scales.get(k, 1) if isinstance(v, (int, float)) and not isinstance(v, bool)
+                                else v for k, v in best_runs["filters"].items()}
     sections, pages = [], {}
     for sec in spec["sections"]:
         payload = section_payload(spec, sec, *pulled[source_key(sec)],
@@ -828,6 +970,9 @@ table.best th { color:var(--muted); font-weight:600; } table.best b.ok { color:#
 .panel button.on { color:var(--accent); border-color:var(--accent); }
 .readout { font-size:11px; color:var(--muted); height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .empty { color:var(--muted); font-size:12px; padding:30px 0; text-align:center; }
+details.md summary { color:var(--muted); font-size:12px; cursor:pointer; }
+details.md table { border-collapse:collapse; font-size:12px; margin:6px 0 10px; display:block; overflow-x:auto; }
+details.md th, details.md td { border:1px solid var(--border); padding:2px 8px; text-align:right; white-space:nowrap; }
 .videos video { width:100%; border-radius:8px; border:1px solid var(--border); background:#000; margin-top:8px; }
 .videos .d { font-size:12px; color:var(--muted); margin-bottom:14px; }
 .uplot, .u-wrap { background:transparent; } .u-select { background:rgba(90,169,230,.15); }
@@ -977,6 +1122,22 @@ function Section(sec, root) {
   const wrap = el('section'); wrap.id = sec.id; root.appendChild(wrap);
   wrap.appendChild(el('h2', null, esc(sec.title)));
   if (sec.text) wrap.appendChild(el('div', 'md', md(sec.text)));
+  if (sec.divergence) {                             // eta_max, with every lr scan's when they differ
+    wrap.appendChild(el('div', 'md', md(sec.divergence.summary)));
+    if (sec.divergence.table) { const d = el('details', 'md');
+      d.innerHTML = '<summary>the lr scans with a diverged run</summary>' + md(sec.divergence.table); wrap.appendChild(d); }
+  }
+  if (sec.regime_map) {                             // every run's regime: rows are lr scans, columns lrs
+    const R = sec.regime_map, C = DATA.regime_colors;
+    const tag = c => c.split(' ').map(w => w[0].toUpperCase()).join('');   // e.g. EOS, PS
+    const cell = c => c ? `<td title="${esc(c)}" style="color:${C[c]};background:${C[c]}26">${tag(c)}</td>` : '<td></td>';
+    const d = el('details', 'md'); d.open = true;
+    d.innerHTML = `<summary>regime of every run: one row per lr scan, one column per ${esc(R.lr)}</summary>`
+      + '<table class="best"><tr>' + [...R.axes, ...R.lrs].map(h => `<th>${esc(h)}</th>`).join('') + '</tr>'
+      + R.rows.map(r => '<tr>' + r.labels.map(l => `<td>${esc(l)}</td>`).join('') + r.cells.map(cell).join('') + '</tr>').join('')
+      + '</table><div class="legend">' + Object.entries(C).map(([k, c]) => `<span style="color:${c}">${tag(k)} ${esc(k)}</span>`).join('') + '</div>';
+    wrap.appendChild(d);
+  }
   wrap.appendChild(noteBox(`${sec.id}::section`, 'comment on this section'));
   const bar = el('div', 'controls'); wrap.appendChild(bar);
   const body = el('div'); wrap.appendChild(body);
@@ -1063,9 +1224,10 @@ function Section(sec, root) {
   function colorOf(v) { const a = ax[axisIdx[state.colorBy]];
     return a.values.length <= CAT.length ? CAT[v % CAT.length] : viridis(v / (a.values.length - 1)); }
 
-  function label(i) { const r = runs[i];
-    return ax.filter(a => a.key === state.colorBy || state.filters[a.key] === 'all')
-             .map(a => (a.key !== state.colorBy ? a.name + '=' : '') + a.labels[r[axisIdx[a.key]]]).join(' · '); }
+  function label(i) { const r = runs[i], eta = (sec.table.lr_absolute || [])[i];
+    return [...ax.filter(a => a.key === state.colorBy || state.filters[a.key] === 'all')
+             .map(a => (a.key !== state.colorBy ? a.name + '=' : '') + a.labels[r[axisIdx[a.key]]]),
+            ...(eta == null ? [] : [`η=${fmt(eta)}`])].join(' · '); }
 
   // One run's points at their own steps: undefined between them (drawn through), null where the
   // run is NaN/inf or, on a log axis, not positive (drawn as a gap).
@@ -1073,13 +1235,15 @@ function Section(sec, root) {
     for (let k = m.o[r]; k < m.o[r + 1]; k++) { const v = m.v[k]; a[m.s[k]] = Number.isFinite(v) && (!log || v > 0) ? v : null; }
     return a; }
 
-  // The y range of the runs that did not diverge (all of them if every one did), kept under
-  // 1e15: uPlot draws no ticks once a scale needs more than 17 integer digits.
-  function yRange(m, sel, log) {
+  // The y range of the runs that did not diverge (all of them if every one did) and the panel's
+  // reference line, kept under 1e15: uPlot draws no ticks once a scale needs more than 17
+  // integer digits.
+  function yRange(m, sel, log, hline) {
     const keep = sel.filter(i => sec.regimes[i] !== 'diverged'), pool = keep.length ? keep : sel;
     let lo = Infinity, hi = -Infinity;
     for (const r of pool) for (let k = m.o[r]; k < m.o[r + 1]; k++) { const v = m.v[k];
       if (Number.isFinite(v) && (!log || v > 0)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+    if (hline != null && (!log || hline > 0)) { lo = Math.min(lo, hline); hi = Math.max(hi, hline); }
     if (!(lo <= hi)) return log ? [1e-3, 1] : [0, 1];
     hi = Math.min(hi, 1e15); lo = Math.min(Math.max(lo, log ? 1e-300 : -1e15), hi);
     if (log) return [lo / 1.3, hi * 1.3];
@@ -1110,7 +1274,7 @@ function Section(sec, root) {
         box.appendChild(noteBox(`${sec.id}::panel::${p.metric}`, 'comment'));
         const m = metrics[p.metric];
         if (!m || !sel.length) { plot.appendChild(el('div', 'empty', m ? 'no runs match' : 'not logged by this sweep')); return; }
-        const log = state.log[p.metric], range = yRange(m, sel, log);
+        const log = state.log[p.metric], range = yRange(m, sel, log, p.hline);
         const data = [X, ...sel.map(i => curve(m, i, log))];
         const series = [{}, ...sel.map(i => ({ label: label(i), stroke: colorOf(runs[i][c]), width: 1.4,
                                               points: { show: false } }))];
@@ -1126,7 +1290,11 @@ function Section(sec, root) {
             if (k == null) { readout.textContent = ''; return; }
             const vals = sel.map((r, s) => { const j = idxs[s + 1];
               return `${series[s + 1].label}: ${fmt(j == null ? null : u.data[s + 1][j])}${j != null && j !== k ? ' @' + j : ''}`; });
-            readout.textContent = `step ${k}` + (vals.length <= 6 ? '  ·  ' + vals.join('  ·  ') : `  ·  ${vals.length} runs`); }] } };
+            readout.textContent = `step ${k}` + (vals.length <= 6 ? '  ·  ' + vals.join('  ·  ') : `  ·  ${vals.length} runs`); }],
+            draw: [u => { if (p.hline == null || (log && p.hline <= 0)) return;     // the panel's dashed reference line
+              const c = u.ctx, b = u.bbox, y = Math.round(u.valToPos(p.hline, 'y', true)), r = window.devicePixelRatio || 1;
+              c.save(); c.strokeStyle = 'rgba(230,230,230,.7)'; c.lineWidth = r; c.setLineDash([6 * r, 4 * r]);
+              c.beginPath(); c.moveTo(b.left, y); c.lineTo(b.left + b.width, y); c.stroke(); c.restore(); }] } };
         charts.push({ u: new uPlot(opts, data, plot), el: plot, metric: p.metric });
       });
     });

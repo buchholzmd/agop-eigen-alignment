@@ -12,9 +12,9 @@ text: |
   the section: pick which axis colors the curves and filter the others. Every sweep
   shares $d=128$, $r=4$, $n=2048$, width $m=512$, standard parameterization and the
   target $g(z)=\sum_k\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$ with
-  $c_k\propto k^{-\alpha^{\ast}}$, except for the axis it varies. The learning rate is
-  relative, $\eta/\eta_{\text{crit}}$ with $\eta_{\text{crit}}=2/\lambda_{\max}(H)$ at
-  initialization, and every run takes 1000 GD steps.
+  $c_k\propto k^{-\alpha^{\ast}}$, except for the axis it varies. Learning rates are shown
+  as $\eta\lambda_0$ with $\lambda_0=\lambda_{\max}(H_0)$, the sharpness at initialization:
+  catapults start at 2, and every run takes 1000 GD steps.
 
 # The W&B project to read can also specify using --project ENTITY/PROJECT 
 # Without either the entity and project in configs/base.yaml are used.
@@ -42,8 +42,10 @@ aliases:
 
 # How sweep axes are shown. `labels` is a list (one per value, in the sweep's order) or a
 # {value: label} map; values without a label are shown as they are.
+# `scale` multiplies what is shown: optim.lr is η/η_crit = ηλ₀/2, so scale 2 shows ηλ₀. Filters
+# and `fixed` still name the sweep's own values (optim.lr: 0.786 is ηλ₀ = 1.572).
 axes:
-  optim.lr:               {name: "lr / η_crit", format: "{:.3f}"}
+  optim.lr:               {name: "ηλ₀", scale: 2, format: "{:.3f}"}
   target.alpha:           {name: "α*"}
   model.width:            {name: "width m"}
   data.n:                 {name: "n"}
@@ -70,6 +72,16 @@ groups: &report_groups
         title: Validation Loss
         log_y: true
         text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
+      - metric: geometry/lr_times_hessian_max_eigval
+        title: Step Size times Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(H_t)$; the dashed line at 2 is the edge of stability.
+      - metric: geometry/lr_times_ntk_max_eigval_x2
+        title: Step Size times NTK Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(2\Theta_t)$; the dashed line at 2 is the catapult threshold.
   - id: nfa
     title: Neural Feature Ansatz
     preamble: true
@@ -134,7 +146,7 @@ sections:
     groups: *report_groups
   - group: parameterization-sweep
     title: Parameterization Sweep
-    text: Standard, NTK, $\mu$P and spectral parameterizations at width $m=512$.
+    text: Standard, NTK, $\mu$P and spectral parameterizations at width $m=512$. The last three scale each layer's learning rate, so $\lambda_{\max}(H_0)$ does not set their stability limit and the line at 2 holds for standard runs only.
     color_by: model.parameterization
     filters: {optim.lr: 0.786, target.alpha: 1}
     groups: *report_groups
@@ -166,23 +178,23 @@ best_runs:
 # A section's id is its `id:`, else its sweep or group name. `name` is optional (default: built
 # from the fields).
 videos:
-  - {section: width-sweep/generalization, rows: [loss, val_loss], cols: model.width, time: optim.lr, fixed: {target.alpha: 1}, name: width-generalization}
-  - {section: width-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.width,
+  - {section: width-sweep/generalization, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, val_loss], cols: model.width, time: optim.lr, fixed: {target.alpha: 1}, name: width-generalization}
+  - {section: width-sweep/nfa, rows: [loss, geometry/lr_times_hessian_max_eigval, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.width,
      time: optim.lr, fixed: {target.alpha: 1}, name: width-nfa}
-  - {section: width-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.width,
+  - {section: width-sweep/subspace, rows: [loss, geometry/lr_times_hessian_max_eigval, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.width,
      time: optim.lr, fixed: {target.alpha: 1}, name: width-subspace}
-  - {section: dataset-sweep/generalization, rows: [loss, val_loss], cols: data.n, time: optim.lr, fixed: {target.alpha: 1}, name: dataset-generalization}
-  - {section: dataset-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: data.n,
+  - {section: dataset-sweep/generalization, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, val_loss], cols: data.n, time: optim.lr, fixed: {target.alpha: 1}, name: dataset-generalization}
+  - {section: dataset-sweep/nfa, rows: [loss, geometry/lr_times_hessian_max_eigval, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: data.n,
      time: optim.lr, fixed: {target.alpha: 1}, name: dataset-nfa}
-  - {section: dataset-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: data.n,
+  - {section: dataset-sweep/subspace, rows: [loss, geometry/lr_times_hessian_max_eigval, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: data.n,
      time: optim.lr, fixed: {target.alpha: 1}, name: dataset-subspace}
-  - {section: parameterization-sweep/generalization, rows: [loss, val_loss], cols: model.parameterization, time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-generalization}
-  - {section: parameterization-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.parameterization,
+  - {section: parameterization-sweep/generalization, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, val_loss], cols: model.parameterization, time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-generalization}
+  - {section: parameterization-sweep/nfa, rows: [loss, geometry/lr_times_hessian_max_eigval, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: model.parameterization,
      time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-nfa}
-  - {section: parameterization-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.parameterization,
+  - {section: parameterization-sweep/subspace, rows: [loss, geometry/lr_times_hessian_max_eigval, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: model.parameterization,
      time: optim.lr, fixed: {target.alpha: 1}, name: parameterization-subspace}
-  - {section: target-sweep/generalization, rows: [loss, val_loss], cols: target.terms_index, time: optim.lr, fixed: {target.alpha: 1}, name: target-generalization}
-  - {section: target-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: target.terms_index,
+  - {section: target-sweep/generalization, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, val_loss], cols: target.terms_index, time: optim.lr, fixed: {target.alpha: 1}, name: target-generalization}
+  - {section: target-sweep/nfa, rows: [loss, geometry/lr_times_hessian_max_eigval, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop], cols: target.terms_index,
      time: optim.lr, fixed: {target.alpha: 1}, name: target-nfa}
-  - {section: target-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: target.terms_index,
+  - {section: target-sweep/subspace, rows: [loss, geometry/lr_times_hessian_max_eigval, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max], cols: target.terms_index,
      time: optim.lr, fixed: {target.alpha: 1}, name: target-subspace}

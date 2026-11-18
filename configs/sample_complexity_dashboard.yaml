@@ -10,15 +10,16 @@ text: |
   training-set size $n\in\lbrace2^9,\dots,2^{17}\rbrace$, at $r=4$, width $m=512$, standard
   parameterization and the target
   $g(z)=\sum_k\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$ with constant $c_k$
-  ($\alpha^{\ast}=0$). The learning rate is relative, $\eta/\eta_{\text{crit}}$ with
-  $\eta_{\text{crit}}=2/\lambda_{\max}(H)$ at initialization, and every run takes 5000 GD
-  steps. Points with $n/d>1024$ were not run. The page ends with $n^{\ast}(d)$, the smallest
+  ($\alpha^{\ast}=0$). Learning rates are shown as $\eta\lambda_0$ with
+  $\lambda_0=\lambda_{\max}(H_0)$, the sharpness at initialization: catapults start at 2,
+  and every run takes 5000 GD steps. Points with $n/d>1024$ were not run. The page ends with $n^{\ast}(d)$, the smallest
   $n$ at which the index space is recovered.
 
 wandb: {entity: buchholzmd-team, project: agop-eigen-alignment}
 
+# As in dashboard.yaml: shown as ηλ₀ = 2 optim.lr, filtered and fixed by optim.lr itself.
 axes:
-  optim.lr: {name: "lr / η_crit", format: "{:.1f}"}
+  optim.lr: {name: "ηλ₀", scale: 2, format: "{:.1f}"}
   data.d:   {name: "d"}
   data.n:   {name: "n"}
 
@@ -39,6 +40,16 @@ groups: &report_groups
         title: Validation Loss
         log_y: true
         text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
+      - metric: geometry/lr_times_hessian_max_eigval
+        title: Step Size times Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(H_t)$; the dashed line at 2 is the edge of stability.
+      - metric: geometry/lr_times_ntk_max_eigval_x2
+        title: Step Size times NTK Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(2\Theta_t)$; the dashed line at 2 is the catapult threshold.
   - id: nfa
     title: Neural Feature Ansatz
     preamble: true
@@ -112,9 +123,9 @@ best_runs:
   columns:
     data.d: "$d$"
     data.n: "$n$"
-    optim.lr: lr ratio
-    lr_absolute: lr absolute
-    eta_crit: "$\\eta_{\\text{crit}}$"
+    optim.lr: "$\\eta\\lambda_{\\max}(H_0)$"
+    lr_absolute: "$\\eta$"
+    hess_lambda0: "$\\lambda_{\\max}(H_0)$"
     regime: regime
     subspace/nfm_subspace_dist_sq: NFM
     subspace/agop_subspace_dist_sq: AGOP
@@ -124,9 +135,9 @@ best_runs:
 
 # One column per d and one frame per n, at the lr the best standard runs sat near.
 videos:
-  - {section: sample-complexity-sweep/generalization, rows: [loss, val_loss], cols: data.d, time: data.n,
+  - {section: sample-complexity-sweep/generalization, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, val_loss], cols: data.d, time: data.n,
      fixed: {optim.lr: 2.0}, name: sample-complexity-generalization}
-  - {section: sample-complexity-sweep/nfa, rows: [loss, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop],
+  - {section: sample-complexity-sweep/nfa, rows: [loss, geometry/lr_times_hessian_max_eigval, nfa/nfa_cosine, nfa/mean_matched_alignment, nfa/wasserstein1_nfm_agop],
      cols: data.d, time: data.n, fixed: {optim.lr: 2.0}, name: sample-complexity-nfa}
-  - {section: sample-complexity-sweep/subspace, rows: [loss, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max],
+  - {section: sample-complexity-sweep/subspace, rows: [loss, geometry/lr_times_hessian_max_eigval, subspace/nfm_subspace_dist_sq, subspace/agop_subspace_dist_sq, subspace/nfm_sin_max, subspace/agop_sin_max],
      cols: data.d, time: data.n, fixed: {optim.lr: 2.0}, name: sample-complexity-subspace}
