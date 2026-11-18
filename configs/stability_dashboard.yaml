@@ -1,0 +1,101 @@
+# The training-regime dashboard for configs/stability_sweep.yaml.
+#
+#   python scripts/dashboard.py --spec stability_dashboard.yaml
+#
+# It builds output/stability_dashboard/. The section opens with eta_max and the regime of
+# every run, one row per (parameterization, width) and one column per learning rate.
+
+title: Training Regimes by Parameterization and Width
+text: |
+  One W&B sweep over the parameterization (standard, NTK, $\mu$P, spectral), the width
+  $m\in\lbrace4,64,512,4096\rbrace$ and the learning rate, at $d=128$, $r=4$, $n=32768$ and the
+  target $g(z)=\sum_k\frac{c_k}{\sqrt2}\big(h_1(z_k)+h_2(z_k)\big)$ with constant $c_k$
+  ($\alpha^{\ast}=0$), for 5000 GD steps. Learning rates are shown as $\eta\lambda_0$ with
+  $\lambda_0=\lambda_{\max}(P^{1/2}H_0P^{1/2})$, the sharpness at initialization in the
+  coordinates gradient descent trains in ($P$ holds each layer's learning rate, $P=I$ for
+  standard), so 2 is the stability limit of every parameterization. A run's regime is the
+  first that applies, with the sharpness $\eta\lambda_{\max}(P^{1/2}H_tP^{1/2})$: diverged;
+  monotonic (the sharpness never moves more than 5% from its start); edge of stability (it
+  rises into, and ends at, 1.9 or more); catapult (the loss rises and recovers while the
+  sharpness falls); progressive sharpening (it ends at $1.25\times$ its start or more); monotonic.
+
+wandb: {entity: buchholzmd-team, project: agop-eigen-alignment}
+
+# As in dashboard.yaml: shown as ηλ₀ = 2 optim.lr, filtered and fixed by optim.lr itself.
+axes:
+  optim.lr:               {name: "ηλ₀", scale: 2, format: "{:.2f}"}
+  model.parameterization: {name: "parameterization"}
+  model.width:            {name: "width m"}
+
+groups: &report_groups
+  - id: dynamics
+    title: Loss and Sharpness
+    preamble: true
+    panels:
+      - metric: loss
+        title: Train Loss
+        log_y: true
+        text: $\frac1n\sum_i\big(f(x_i)-y_i\big)^2$ on the training inputs.
+      - metric: geometry/lr_times_hessian_max_eigval
+        title: Step Size times Preconditioned Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(P^{1/2}H_tP^{1/2})$; the dashed line at 2 is the edge of stability.
+      - metric: geometry/lr_times_ntk_max_eigval_x2
+        title: Step Size times Preconditioned NTK Sharpness
+        log_y: true
+        hline: 2
+        text: $\eta\lambda_{\max}(\frac2n JPJ^\top)$; the dashed line at 2 is the catapult threshold.
+      - metric: val_loss
+        title: Validation Loss
+        log_y: true
+        text: $\frac{1}{n_{\text{val}}}\sum_i\big(f(x_i)-f^{\ast}(x_i)\big)^2$ on held-out inputs with noiseless labels.
+  - id: subspace
+    title: Subspace Alignment
+    preamble: true
+    panels:
+      - metric: subspace/nfm_subspace_dist_sq
+        title: NFM Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_M$ and span($U$), from 0 to $r$.
+      - metric: subspace/agop_subspace_dist_sq
+        title: AGOP Distance to Index-Space
+        text: $\Vert\sin\Theta\Vert_F^2$ between $Q_{G_n}$ and span($U$), from 0 to $r$.
+      - metric: subspace/nfm_depth
+        title: NFM Index-Space Depth
+        log_y: true
+        text: The number of top eigenvectors of $M$ it takes to hold span($U$), $r$ when recovered.
+      - metric: subspace/agop_depth
+        title: AGOP Index-Space Depth
+        log_y: true
+        text: The number of top eigenvectors of $G_n$ it takes to hold span($U$), $r$ when recovered.
+  - id: nfa
+    title: Neural Feature Ansatz
+    preamble: true
+    panels:
+      - metric: nfa/nfa_cosine
+        title: NFM/AGOP Cosine Similarity
+        text: $\cos(M,G_n)$, the Neural Feature Ansatz $M\propto G_n$.
+      - metric: nfa/mean_matched_alignment
+        title: NFM/AGOP Matched Eigenvector Alignment
+        text: All $d$ eigenvectors of $M$ matched to all $d$ of $G_n$; the mean overlap of the $r$ best pairs.
+
+# `regime_map: true` opens the section with every run's regime.
+sections:
+  - group: stability-sweep
+    title: Stability Sweep
+    text: Parameterization and width against the learning rate.
+    color_by: optim.lr
+    filters: {model.parameterization: mup, model.width: 512}
+    regime_map: true
+    groups: *report_groups
+
+# One video per parameterization: a column per width, a frame per learning rate.
+videos:
+  - {section: stability-sweep/dynamics, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, subspace/nfm_subspace_dist_sq],
+     cols: model.width, time: optim.lr, fixed: {model.parameterization: standard}, name: stability-standard}
+  - {section: stability-sweep/dynamics, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, subspace/nfm_subspace_dist_sq],
+     cols: model.width, time: optim.lr, fixed: {model.parameterization: ntk}, name: stability-ntk}
+  - {section: stability-sweep/dynamics, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, subspace/nfm_subspace_dist_sq],
+     cols: model.width, time: optim.lr, fixed: {model.parameterization: mup}, name: stability-mup}
+  - {section: stability-sweep/dynamics, rows: [loss, geometry/lr_times_hessian_max_eigval, geometry/lr_times_ntk_max_eigval_x2, subspace/nfm_subspace_dist_sq],
+     cols: model.width, time: optim.lr, fixed: {model.parameterization: spectral}, name: stability-spectral}

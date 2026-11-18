@@ -1,0 +1,30 @@
+extends: base.yaml
+name: stability-sweep
+
+# Where each parameterization trains -- monotonic, progressive sharpening, catapult, edge of
+# stability or divergence -- across width. optim.lr is eta / eta_crit with
+# eta_crit = 2 / lambda_max(P^1/2 H_0 P^1/2), P the per-layer learning rates of gd_update
+# (P = 1 for standard), so optim.lr = 1 is the stability limit of every parameterization.
+# Everything else is base.yaml's baseline, where span(U) is recovered.
+
+sweep:
+  model.parameterization: [standard, ntk, mup, spectral]
+  model.width: [4, 64, 512, 4096]
+  # eta * lambda_0 / 2 for eta * lambda_0 = 0.25, 0.5, 1, 1.5, 1.8, 1.9, 2, 2.1, 2.2, 2.5, 3,
+  # 3.5, 4, 5, 6, 8, 10, 12: dense around the edge of stability at 2, up past the standard
+  # divergence at about 8 to 9.
+  optim.lr: [0.125, 0.25, 0.5, 0.75, 0.9, 0.95, 1.0, 1.05, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0]
+
+limits:
+  max_params: 100000000
+  max_act_bytes: 4000000000
+  max_n_times_m: 1000000000
+  min_capacity: 0.5
+  max_capacity: 1024
+
+slurm:
+  gpus: nvidia_h100_80gb_hbm3_2g.20gb:1
+  cpus_per_task: 3
+  mem: 70G
+  time: "24:00:00"
+  array: "0-15%16"
