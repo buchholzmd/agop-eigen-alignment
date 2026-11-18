@@ -130,7 +130,7 @@ The SLURM scripts activate the environment at `~/jax_env`, so keep that path. Jo
 
 ## Running on Fir
 
-Run everything from the repository root. `<SWEEP-NAME>.yaml` is a file in `configs/` (for example `configs/full_sweep.yaml`), and every sweep config extends `configs/base.yaml`.
+Run everything from the repository root. `<SWEEP-NAME>.yaml` is a file in `configs/` (for example `configs/full_sweep.yaml`), and every sweep config extends `configs/base.yaml`, the baseline where the NFM and AGOP recover span($U$), and overrides only what it varies.
 
 Every sweep runs as a [W&B Sweep](https://docs.coreweave.com/models/sweeps/sweep-config-keys) through one script, `scripts/run_sweep.py`. A *cell* is every sweep axis except the learning rate, and a *point* is one (cell, lr) pair; each point becomes one W&B run. W&B "creates a parallel coordinates plot, a parameter importance plot, and a scatter plot when you start a sweep job" ([Visualize sweep results](https://docs.coreweave.com/models/sweeps/visualize-sweep-results)), and they rank runs by `wandb.sweep_metric`, which defaults to minimizing `val_loss`.
 
@@ -276,11 +276,13 @@ Metrics without a prefix:
 
 ### `geometry/`
 
-- **`hessian_max_eigval`**: $\lambda_{\max}(H)$, the sharpness, from `metrics.num_power_iters` steps of power iteration.
-- **`ntk_max_eigval_x2`**: $2\lambda_{\max}(K)$, where $K=\frac1n JJ^\top$ is the empirical NTK. The loss is MSE, so this is exactly the top eigenvalue of the Gauss–Newton Hessian $\frac2n J^\top J$. Its gap to `hessian_max_eigval` is the part of the sharpness that the Gauss–Newton term does not explain.
-- **`sharpness_ratio`**: $\eta\lambda_{\max}(H)/2$, which crosses 1 exactly at the edge of stability (EOS), $\lambda_{\max}(H)=2/\eta$; above 1, GD has passed the classical stability limit. Unlike `eos_gap`, it has no units, so runs with different learning rates share one scale.
+The sharpness is the one gradient descent sees. `gd_update` scales each layer's step by a fixed factor, so it is preconditioned GD with a diagonal $P$ (`opt.lr_multipliers`), stable iff $\eta\lambda_{\max}(P^{1/2}HP^{1/2})<2$. For standard parameterization $P=I$. Runs from before 2026-11-17 logged $P=I$ for every parameterization.
+
+- **`hessian_max_eigval`**: $\lambda_{\max}(P^{1/2}HP^{1/2})$, the sharpness, from `metrics.num_power_iters` steps of power iteration.
+- **`ntk_max_eigval_x2`**: $2\lambda_{\max}(K)$, where $K=\frac1n JPJ^\top$ is the empirical NTK. The loss is MSE, so this is exactly the top eigenvalue of the Gauss–Newton Hessian $\frac2n P^{1/2}J^\top JP^{1/2}$. Its gap to `hessian_max_eigval` is the part of the sharpness that the Gauss–Newton term does not explain.
+- **`sharpness_ratio`**: $\eta\lambda_{\max}(P^{1/2}HP^{1/2})/2$, which crosses 1 exactly at the edge of stability (EOS), the sharpness is $2/\eta$; above 1, GD has passed the classical stability limit. Unlike `eos_gap`, it has no units, so runs with different learning rates share one scale.
 - **`eos_threshold`**: $2/\eta$, constant within a run: the EOS line that `hessian_max_eigval` crosses.
-- **`eos_gap`**: $\lambda_{\max}(H)-2/\eta$, positive above EOS. It marks the same crossing as `sharpness_ratio`, but in eigenvalue units.
+- **`eos_gap`**: `hessian_max_eigval` $-\,2/\eta$, positive above EOS. It marks the same crossing as `sharpness_ratio`, but in eigenvalue units.
 
 ### `neuron/`
 
@@ -362,9 +364,9 @@ The learned $M$ and $G_n$ against the target subspace span($U$), by eigenvectors
 
 Besides the config file's own settings, flattened (e.g. `model.width`), each run's config holds these values, fixed before training:
 
-- **`hess_lambda0`**: $\lambda_{\max}(H)$ at initialization.
+- **`hess_lambda0`**: `geometry/hessian_max_eigval` at initialization, $\lambda_0=\lambda_{\max}(P^{1/2}H_0P^{1/2})$.
 - **`eta_crit`**: $2/$`hess_lambda0`, the edge-of-stability learning rate at initialization.
-- **`ntk_lambda0`**: $\lambda_{\max}(K)$ at initialization.
+- **`ntk_lambda0`**: $\lambda_{\max}(\frac1n JPJ^\top)$ at initialization.
 - **`lr_absolute`**: the learning rate $\eta$ the run uses: `optim.lr` itself, or `optim.lr` times `eta_crit` when `optim.lr_mode` is `relative`.
 - **`lr_relative`**: $\eta/$`eta_crit`.
 - **`phi`**: $m/r$, the width per target direction.
@@ -378,7 +380,7 @@ Besides the config file's own settings, flattened (e.g. `model.width`), each run
 
 These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/metrics.py](src/metrics.py)) rather than logged at every step.
 
-- **`regime`**: `monotonic`, `catapult` (the loss rises, then ends below its value before the rise) or `diverged` (the loss is non-finite, or its final value exceeds 100× its minimum).
+- **`regime`**: the first that applies of `diverged` (the loss is non-finite, or its final value exceeds 100× its minimum); `monotonic` (the sharpness $\eta\lambda_{\max}(P^{1/2}H_tP^{1/2})$ never moves more than 5% from its start); `edge of stability` (its median over the last fifth of training is at least 1.9, reached by rising more than 5% above its start or back from its minimum); `catapult` (the loss rises, then ends below its value before the rise, and the sharpness falls more than 5% below its start); `progressive sharpening` (it ends at 1.25× its start or more); `monotonic`. Runs from before 2026-11-17 used only the loss: `catapult` for any rise and recovery.
 - **`loss_final`**: `loss` at the last step.
 - **`loss_min`**: the minimum of `loss` over training.
 - **`loss_exponent`**: $\beta$ in $\text{loss}\approx Ct^\beta$, fit over the longest log-log window of at least 5 steps with $R^2\ge0.98$; NaN if no window qualifies.
@@ -408,6 +410,7 @@ These are single numbers per run, set in `wandb.summary` by `run_summary` ([src/
 python scripts/dashboard.py                      # pull the runs (cached), build the pages and videos
 python scripts/dashboard.py --no-videos          # pages only
 python scripts/dashboard.py --spec sample_complexity_dashboard.yaml   # the (d, n) dashboard
+python scripts/dashboard.py --spec stability_dashboard.yaml           # the regime dashboard
 python scripts/dashboard.py --list [TEXT]        # the project's sweeps and groups, filtered by TEXT
 python scripts/dashboard.py --project ENT/PROJ   # read another project
 python scripts/dashboard.py --refresh            # re-download every run
@@ -419,7 +422,8 @@ open output/dashboard/dashboard.html             # view (macOS)
 - **Runs.** Each section and video names a `sweep` (by name or id), a `group`, or both. A `group` reads every sweep with runs in that W&B group and skips the group's runs that belong to no sweep, such as runs from before the sweeps. When several sweeps match, the one with the newest run is used and the others are printed; `sweeps: all` combines them, keeping the newest run of each point. `--list` shows what there is to choose from.
 - **Sections.** A section's control bar is the run set for all of its panels: one axis colors the curves, and each other axis is filtered to one value or to all of them. Panels plot one metric per run against the step, under a Markdown description that can contain LaTeX. Metrics are named as in [W&B metrics](#wb-metrics), and `aliases` maps a name, or the stem of an indexed family, to the one older runs logged. A panel group with `preamble: true` opens with a list of its panels, each with its title, metric and that metric's description copied word for word from [W&B metrics](#wb-metrics) at build time; a metric that section doesn't describe is left out, with a warning.
 - **Videos** are grids with one row per metric and one column per value of a sweep axis, with one frame per value of another axis (ascending when numeric). `fixed` must pin every remaining axis. A video's `section` says where it is shown: `<section id>/<group id>` (e.g. `width-sweep/generalization`) puts it under that panel group, and `<section id>` at the end of the section. A video with only `section` reads that section's runs; without `section`, a video goes at the end of the section that reads the same runs. A panel group's `id` identifies it, and its `title` is only the label. Each frame shows the current curve, colored by its `regime`, over faint curves for the earlier frames.
-- **Best runs.** A spec with `best_runs:` ends the page with a table of each section's best run for one `metric`, among the runs that pass `filters` and did not diverge, and how many of them reach `threshold`; `better` says whether below or above the threshold is good. The metric, threshold, side and filters can be changed in the page. `columns` defaults to $n$, $m$, parameterization, $\alpha^{\ast}$, target, lr ratio, absolute lr, $\eta_{\text{crit}}$, regime, the NFM and AGOP distances, and the train and validation losses.
+- **Best runs.** A spec with `best_runs:` ends the page with a table of each section's best run for one `metric`, among the runs that pass `filters` and did not diverge, and how many of them reach `threshold`; `better` says whether below or above the threshold is good. The metric, threshold, side and filters can be changed in the page. `columns` defaults to $n$, $m$, parameterization, $\alpha^{\ast}$, target, $\eta\lambda_0$, $\eta$, $\lambda_0$, regime, the NFM and AGOP distances, and the train and validation losses.
+- **Learning rate.** Shown as $\eta\lambda_0$ with $\lambda_0=\lambda_{\max}(P^{1/2}H_0P^{1/2})$: an axis's `scale` multiplies what is shown (with `lr_mode: relative`, `optim.lr` is $\eta\lambda_0/2$, so `scale: 2`), while filters and `fixed` keep the sweep's values. Each section opens with $\eta_{\max}$, the smallest learning rate of an lr scan (the runs that differ only in lr) whose run diverged, and with `regime_map: true` the `regime` of every run, one row per lr scan and one column per learning rate. The dashboard computes `regime` itself, from `loss` and `geometry/hessian_max_eigval`; hovers and video cells show each run's $\eta$. The panels `geometry/lr_times_hessian_max_eigval` ($\eta\lambda_{\max}(P^{1/2}H_tP^{1/2})$) and `geometry/lr_times_ntk_max_eigval_x2` ($\eta\lambda_{\max}(\frac2nJPJ^\top)$) are computed by the dashboard from the logged eigenvalues, and a panel's `hline` draws a dashed line: at 2, the edge of stability and the catapult threshold. In runs from before 2026-11-17 the sharpness of the NTK, $\mu$P and spectral parameterizations is $H$'s, not $P^{1/2}HP^{1/2}$'s, so neither holds for them.
 - **Sample complexity.** `best_runs.sample_complexity` lists metrics, and for each adds the grid of the best run's last value at every $(d, n)$, the estimate $n^{\ast}(d)$ (the smallest $n$ that reaches the threshold, interpolated in $\log n$ around the crossing) and the least-squares fit $n^{\ast}\approx C d^{\beta}$. `configs/sample_complexity_dashboard.yaml` does this for `sample_complexity_sweep.yaml`.
 - **Comments.** Every panel, panel group, video and section has a "+ comment" box that takes Markdown with `$...$` LaTeX. Comments are kept in the browser (localStorage), shared by the combined and section pages. **Export comments** turns them into one Markdown file, to download or copy. It covers only what you commented on: each section's current run set, and each commented panel's title, description and a PNG of the plot as shown, followed by your comment; a commented video adds its current frame. The images are inlined as `data:` URIs, which VS Code, Obsidian and Typora render; GitHub does not.
 - **Checks.** The build stops before rendering anything if the spec does not fit its sweeps: an axis, filter value or `fixed` value that is not on the sweep, an unpinned video axis, or a repeated section id or video name. The message lists the valid values.
