@@ -9,15 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 import jax.random as jr
 
-from jax.flatten_util import ravel_pytree
 from optax import l2_loss
 
 from utils import RNGKey
 from networks import MLP
 from opt import TrainState, gd_update, train
-from ntk import nvp
-from hess import _hvp_flat
-from linalg import directional_strength, matrix_cosine, mvp_power_iteration, nuclear
+from linalg import directional_strength, matrix_cosine, nuclear
 from poly import poly
 from multi_index import gaussian_egop, generate_multi_index_data, multi_index_set
 from agop import agop
@@ -67,16 +64,14 @@ def build_model(cfg, rng):
 def critical_lr(state, model, X, y, loss_fn, rng, iters=30):
     '''-> ntk_lambda0, hess_lambda0, eta_crit.  Sources: cells 13, 19, 21.
 
-    eta_crit = 2/lambda_max(H) is the GD stability limit. Note 2/lambda_max(NTK) is TWICE
-    that, because loss_fn = 2*l2_loss makes the Gauss-Newton Hessian (2/n)J^T J while
-    ntk.nvp returns (1/n)J J^T.
+    Both eigenvalues are in the coordinates gd_update trains in: lambda_max of (1/n) J P J^T
+    and of P^1/2 H P^1/2, with P the per-layer learning rates (opt.lr_multipliers; P = 1 for
+    standard parameterization). eta_crit = 2/hess_lambda0 is the GD stability limit. Note
+    2/ntk_lambda0 is TWICE that, because loss_fn = 2*l2_loss makes the Gauss-Newton Hessian
+    (2/n)J^T J while ntk.nvp returns (1/n)J J^T.
     '''
-    pf, _ = ravel_pytree(state.params)
-    ntk_lambda0, _ = mvp_power_iteration(
-        lambda v: nvp(state.params, model, X, v), X.shape[0], iters, rng)
-    hess_lambda0, _ = mvp_power_iteration(
-        lambda v: _hvp_flat(state.params, state.apply_fn, loss_fn, X, y, v),
-        pf.shape[0], iters, rng)
+    ntk_lambda0 = metrics.ntk_eigs(state, model, X, iters, rng)["max_eigvals"]
+    hess_lambda0 = metrics.hessian_eigs(state, loss_fn, X, y, iters, rng)["max_eigvals"]
     return float(ntk_lambda0), float(hess_lambda0), 2.0 / float(hess_lambda0)
 
 def make_metrics_config(cfg, model, X, y, loss_fn, rng, X_val=None, y_val=None,
@@ -139,7 +134,7 @@ def run_one(cfg, log_wandb=None, run=None):
                              target_egop=G_egop, egop_eigvals=egop_eigvals, egop_eigvecs=egop_eigvecs)
     state, traj, metrics = train(state, loss_fn, X, y,
                                  lr=lr, steps=get_in(cfg, "optim.steps"),
-                                 metrics_config=mc)
+                                 metrics_config=mc, keep_traj=False)
 
     out = dict(cfg=cfg, X=X, y=y, U=U, G_star=G_star, G_egop=G_egop, target_fn=target_fn,
                target_eigvals=target_eigvals, metrics=metrics, traj=traj,
@@ -166,6 +161,9 @@ def log_run_to_wandb(out, run=None):
         lr_relative  = out["lr"] / out["eta_crit"],
         ntk_lambda0  = out["ntk_lambda0"],
         hess_lambda0 = out["hess_lambda0"],
+        # geometry/ and hess_lambda0 are lambda_max(P^1/2 H P^1/2); runs without this key
+        # logged lambda_max(H), the same only for standard parameterization.
+        sharpness_preconditioned = True,
         phi          = m / r,          # width per target direction
         capacity     = n / d,          # samples per ambient dimension
         n_over_r2    = n / r ** 2,     # samples against the target AGOP floor

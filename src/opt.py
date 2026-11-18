@@ -65,14 +65,17 @@ class TrainState(struct.PyTreeNode):
           parameterization=parameterization
       )
 
-def train(state, loss_fn, X, y, lr, steps, metrics_config):
+def train(state, loss_fn, X, y, lr, steps, metrics_config, keep_traj=True):
+    """keep_traj=False keeps no parameters per step: a full copy each step is 2 GB per
+    1000 steps at d=128, m=4096, and run_one never reads it."""
     metrics = {}
     traj = []
 
     pbar = TrainingBar(steps)
 
     for t in pbar:
-        traj.append(state.params)
+        if keep_traj:
+            traj.append(state.params)
         prev_state = state # save state for computing metrics before update
 
         t0 = time.perf_counter()
@@ -95,8 +98,11 @@ def train(state, loss_fn, X, y, lr, steps, metrics_config):
             tqdm_info={"loss": float(loss_val), "update": f"{t_update:.3f}s"},
             aux_metrics={k: f"{v['time']:.3f}s" for k, v in step_metrics.items()}
         )
-        
-    traj.append(state.params)
+        if not jnp.isfinite(loss_val):      # diverged: every later step is NaN too
+            break
+
+    if keep_traj:
+        traj.append(state.params)
 
     # trailing evaluation at theta_steps
     loss, acts = jax.jit(batch_loss(state.apply_fn, loss_fn, (X, y)))(state.params)
@@ -109,6 +115,18 @@ def train(state, loss_fn, X, y, lr, steps, metrics_config):
             metrics.setdefault(name, {}).setdefault(k, []).append(v)
 
     return state, traj, metrics
+
+def lr_multipliers(params, parameterization="standard"):
+    """The diagonal of P in gd_update's step theta <- theta - lr * P grad L, as a pytree
+    like params: each block's learning-rate factor. Read off one gd_update from zero
+    with unit gradients, so it cannot drift from gd_update. P = 1 for standard.
+
+    GD with P is plain GD on phi = P^-1/2 theta, so its stability limit is
+    lr < 2 / lambda_max(P^1/2 H P^1/2), not 2 / lambda_max(H).
+    """
+    zeros = jax.tree.map(jnp.zeros_like, params)
+    ones = jax.tree.map(jnp.ones_like, params)
+    return jax.tree.map(jnp.negative, gd_update(zeros, ones, 1.0, parameterization))
 
 def gd_update(params, grads, lr, parameterization="standard"):
     new_params = []

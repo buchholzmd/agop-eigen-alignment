@@ -20,6 +20,7 @@ from functools import partial
 from nn_utils import get_activations, nn_agop, sparsity, _cov_mvp
 from ntk import nvp
 from hess import _hvp_flat
+from opt import lr_multipliers
 from linalg import (align_bases, directional_strength, matrix_cosine, mvp_orthogonal_iteration,
                     mvp_power_iteration, hutchinson_trace_estimate, intrinsic_dim, stable_rank,
                     subspace_angles, subspace_depth, wasserstein_1d, nuclear)
@@ -149,7 +150,9 @@ def rank_stats(X, num_power_iters=None, rng=None, dense_max=2048):
         "participation_ratio": intrinsic ** 2 / (stable + 1e-30),
     }
 
-def neuron_cov_stats(state, model, X, num_power_iters, rng, dense_max=2048, **kwargs):
+def neuron_cov_stats(state, model, X, num_power_iters, rng, dense_max=4096, **kwargs):
+    # dense_max 4096: at n = 32768, m = 4096 the matrix-free path is 6001 products with the
+    # (n, m) activations a step, far slower than one exact 4096 x 4096 Gram.
     acts = kwargs.get("activations", get_activations(state, model, X))
 
     result = {}
@@ -166,31 +169,39 @@ def val_loss(state, loss_fn, X_val, y_val, **kwargs):
     return {"value": loss_fn(outputs, y_val).mean()}
 
 def ntk_eigs(state, model, X, num_power_iters, rng, **kwargs):
-    eigval, eigvec = mvp_power_iteration(
-        lambda v: nvp(state.params, model, X, v),
+    """Top eigenvalue of the NTK the optimizer sees, (1/n) J P J^T with P its per-layer
+    learning rates (opt.lr_multipliers): (1/n) J J^T for standard parameterization.
+    The eigenvector is not kept: one per step is n floats held for the whole run."""
+    P = lr_multipliers(state.params, state.parameterization)
+    eigval, _ = mvp_power_iteration(
+        lambda v: nvp(state.params, model, X, v, P),
         X.shape[0],
         num_power_iters,
         rng
     )
-    return {"max_eigvals": eigval, "max_eigvecs": eigvec}
+    return {"max_eigvals": eigval}
 
 def hessian_eigs(state, loss_fn, X, y, num_power_iters, rng, **kwargs):
-    params_flat, _ = jax.flatten_util.ravel_pytree(state.params)
+    """Top eigenvalue of the Hessian the optimizer sees, P^1/2 H P^1/2 with P its
+    per-layer learning rates (opt.lr_multipliers): H for standard parameterization.
+    GD with step lr is stable iff lr times it is below 2. The eigenvector is not kept:
+    one per step is every parameter, 2 GB per 1000 steps at d=128, m=4096."""
+    s = jnp.sqrt(jax.flatten_util.ravel_pytree(lr_multipliers(state.params, state.parameterization))[0])
 
-    eigval, eigvec = mvp_power_iteration(
-            lambda v: _hvp_flat(
+    eigval, _ = mvp_power_iteration(
+            lambda v: s * _hvp_flat(
                 state.params,
                 apply_fn=state.apply_fn,
                 loss_fn=loss_fn,
                 X=X,
                 y=y,
-                v_flat=v
+                v_flat=s * v
             ),
-            params_flat.shape[0],
+            s.shape[0],
             num_power_iters,
             rng
         )
-    return {"max_eigvals": eigval, "max_eigvecs": eigvec}
+    return {"max_eigvals": eigval}
 
 def matched_alignment(learned_eigvecs, reference_eigvecs):
     """Hungarian-matched eigenvector overlaps, keyed by the REFERENCE eigenvector X.
@@ -395,18 +406,46 @@ def fit_power_law(x, y, min_points=5, r2_min=0.98):
             "n_points": int(j - i)}
 
 
-def classify_regime(loss, blowup=100.0, tol=1e-9):
-    """monotonic | catapult | diverged.
+def classify_regime(loss, sharpness=None, blowup=100.0, tol=1e-9, eos=1.9, sharpening=1.25, flat=0.05):
+    """monotonic | catapult | diverged, and with `sharpness` also
+    progressive sharpening | edge of stability.
 
     A catapult needs both a rise AND a recovery below the pre-rise loss. Without
     the recovery condition every diverging run also looks like a catapult.
+
+    sharpness: lr * lambda_max(P^1/2 H_t P^1/2) per step (metrics.hessian_eigs), which GD
+    holds at 2 at the edge of stability. With it, the label is the first that applies:
+      diverged                as above;
+      monotonic               the sharpness never moves more than `flat` from its start
+                              (lazy training, even when it starts just below 2);
+      edge of stability       the median over the last fifth of training is >= eos, reached by
+                              rising: the sharpness went more than `flat` above its start, or
+                              climbed more than `flat` back from its minimum (a catapult from
+                              just above 2 settles just below it without either);
+      catapult                the loss rule above, and the sharpness fell more than `flat` below
+                              its start (oscillation at the edge of stability also rises and recovers);
+      progressive sharpening  that median is >= sharpening x the sharpness at the start;
+      monotonic               otherwise.
+    A catapult that later sharpens back to the edge of stability is labeled by its end.
     """
     loss = np.asarray(loss, dtype=float).ravel()
     if not np.all(np.isfinite(loss)) or loss[-1] > blowup * np.nanmin(loss):
         return "diverged"
     rises = np.where(np.diff(loss) > tol * np.maximum(1.0, np.abs(loss[:-1])))[0]
-    if len(rises) and loss[-1] < loss[rises[0]]:
+    recovered = len(rises) > 0 and loss[-1] < loss[rises[0]]
+    if sharpness is None:
+        return "catapult" if recovered else "monotonic"
+    sharpness = np.asarray(sharpness, dtype=float).ravel()
+    start, end = sharpness[0], np.nanmedian(sharpness[-max(1, sharpness.size // 5):])
+    if np.nanmax(np.abs(sharpness - start)) <= flat * start:
+        return "monotonic"
+    lowest = np.nanmin(sharpness)
+    if end >= eos and (np.nanmax(sharpness) > (1 + flat) * start or end - lowest > flat * start):
+        return "edge of stability"
+    if recovered and lowest < (1 - flat) * start:
         return "catapult"
+    if end >= sharpening * start:
+        return "progressive sharpening"
     return "monotonic"
 
 
@@ -424,7 +463,7 @@ def run_summary(metrics, lr):
     fit = fit_power_law(np.arange(1, loss.size + 1), loss)
 
     out = {
-        "regime":              classify_regime(loss),
+        "regime":              classify_regime(loss, 2.0 * sharp),
         "loss_final":          float(loss[-1]),
         "loss_min":            float(np.nanmin(loss)),
         "loss_exponent":       fit["exponent"],      # loss ~ step^beta
