@@ -4,6 +4,7 @@ name: full_sweep
 optim:
   lr_mode: absolute
   steps: 1000
+target: {alpha: 1.0, terms: [{0: 2}]}   # base.yaml's before 2026-11-17
 
 # Axes other than lr, which comes from lr_scan below. The W&B sweep runs every
 # (cell, lr) point, past divergence included.

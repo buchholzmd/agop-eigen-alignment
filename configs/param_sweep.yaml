@@ -2,6 +2,11 @@ extends: base.yaml
 name: param_sweep
 optim:
   lr_mode: absolute          # the grid below is absolute, as in the notebook
+  steps: 1000
+# base.yaml's settings before 2026-11-17.
+data:   {n: 128}
+model:  {width: 1000}
+target: {alpha: 1.0, terms: [{0: 2}]}
 sweep:
   model.parameterization: [standard, ntk, mup]
   optim.lr: linspace(0.0001, 1.0, 101)

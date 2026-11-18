@@ -2,14 +2,7 @@ extends: base.yaml
 name: sample-complexity-sweep
 
 # A (d, n) grid for the sample-complexity law n*(d): for each d, the smallest n at
-# which the NFM and AGOP eigenspaces recover span(U). Everything else is the other
-# sweeps' baseline at alpha = 0, the easier of their two values.
-data:   {n: 2048, d: 128, r: 4, noise: 0.001, normalize: none, seed: 33}
-model:  {depth: 2, parameterization: standard, width: 512}
-target: {basis: hermite, normalize: true, alpha: 0.0, terms: [{0: 1}, {0: 2}]}
-# 5000 steps: the n=65536 runs of dataset-sweep were still recovering at step 1000.
-optim:  {lr_mode: relative, steps: 5000}
-metrics: {num_power_iters: 30, every: 1}
+# which the NFM and AGOP eigenspaces recover span(U). Everything else is base.yaml's baseline.
 
 sweep:
   data.d: [32, 64, 128, 256]

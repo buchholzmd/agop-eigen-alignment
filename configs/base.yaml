@@ -1,9 +1,11 @@
-# Base experiment configuration.
+# Base experiment configuration: the baseline where the NFM and the AGOP both recover span(U).
+# In the sample-complexity sweep at d = 128 that first happens at n = 32768 (NFM distance 0.048,
+# AGOP 0.004), at eta * lambda_0 = 4, the best learning rate at every n from 16384 up.
 # Sweep files inherit from this with `extends: base.yaml` and override single keys.
 name: base
 
 data:
-  n: 128            # training samples
+  n: 32768          # training samples
   d: 128            # ambient input dimension
   r: 4              # index-subspace dimension
   noise: 0.001      # label noise std, applied AFTER normalization
@@ -34,7 +36,7 @@ target:
   # Ben Arous et al. (arXiv:2508.03688) split at alpha = 1/2: below it the student
   # width matters only through phi = m/r, above it only in absolute terms. Do NOT
   # use alpha = 0.5 -- both of their scaling laws degenerate exactly there.
-  alpha: 1.0
+  alpha: 0.0
   # Multi-index structure, as patterns broadcast over the r directions. A term
   # maps a RELATIVE direction offset to a Hermite degree, so it is r-independent.
   #   [{0: 2}]                 h_2(z_k)                          -- single quadratic link
@@ -43,17 +45,17 @@ target:
   # A degree-1 term gives every direction information exponent 1, which puts an
   # off-diagonal c_j c_k block in G*: directions stop being individually
   # identifiable, but span(U) does not, so subspace metrics are unaffected.
-  terms: [{0: 2}]
+  terms: [{0: 1}, {0: 2}]
 
 model:
-  width: 1000
+  width: 512
   depth: 2                      # number of weight layers; 2 => [d, m, 1]
   parameterization: standard    # standard | ntk | mup | spectral
 
 optim:
-  steps: 1000
+  steps: 5000
   lr_mode: relative   # 'relative' => lr multiplies eta_crit; 'absolute' => lr used as-is
-  lr: 1.0
+  lr: 2.0             # eta * lambda_0 = 4: eta_crit = 2 / lambda_0
 
 metrics:
   num_power_iters: 30

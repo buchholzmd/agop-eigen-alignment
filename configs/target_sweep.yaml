@@ -1,13 +1,9 @@
 extends: base.yaml
 name: target-sweep
 
-# Baseline, held fixed except for the swept axis. d=128, r=4 is the fixed-rank
-# multi-index regime: a 4-dim index subspace to recover inside 128 dims.
-data:   {n: 2048, d: 128, r: 4, noise: 0.001, normalize: none, seed: 33}
-model:  {depth: 2, parameterization: standard, width: 512}
-target: {basis: hermite, normalize: true, alpha: 0.0, terms: [{0: 1}, {0: 2}]}
-optim:  {lr_mode: relative}
-metrics: {num_power_iters: 30, every: 1}
+# base.yaml's baseline except for the swept axes, at the n and step count this sweep ran with.
+data:   {n: 2048}
+optim:  {steps: 1000}
 
 sweep:
   # 2x2: degree (p = min|alpha|) x additive vs interacting.
